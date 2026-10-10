@@ -28,16 +28,16 @@ cp config.example.json config.json     # 填 ws_url / token / superusers
 
 | 插件 | 说明 |
 |------|------|
-| [`ai_chat`](https://github.com/<you>/ncqqpy-plugin-ai-chat) | 把 DSH 式的对话语义搬进 QQ：多会话、上下文压缩、内置工具、联网搜索、函数图像与 Markdown 出图。 |
-| [`bupt_news`](https://github.com/<you>/ncqqpy-plugin-bupt-news) | 定时同步北邮校内通知（门户登录 + AI 摘要 + 表格/图片处理），按配置推送到指定群与私聊。 |
-| [`byrdocs`](https://github.com/<you>/ncqqpy-plugin-byrdocs) | 检索 byrdocs.org 资料库、按编号翻页取详情、下载文件到群，带服务范围白名单。 |
-| [`essential`](https://github.com/<you>/ncqqpy-plugin-essential) | 禁言/踢人/解禁/群信息等群管理命令，以及按群配置的入群欢迎语（含定时撤回）。 |
+| [`ai_chat`](https://github.com/Green1423/ncqqpy-plugin-ai-chat) | 把 DSH 式的对话语义搬进 QQ：多会话、上下文压缩、内置工具、联网搜索、函数图像与 Markdown 出图。 |
+| [`bupt_news`](https://github.com/Green1423/ncqqpy-plugin-bupt-news) | 定时同步北邮校内通知（门户登录 + AI 摘要 + 表格/图片处理），按配置推送到指定群与私聊。 |
+| [`byrdocs`](https://github.com/Green1423/ncqqpy-plugin-byrdocs) | 检索 byrdocs.org 资料库、按编号翻页取详情、下载文件到群，带服务范围白名单。 |
+| [`essential`](https://github.com/Green1423/ncqqpy-plugin-essential) | 禁言/踢人/解禁/群信息等群管理命令，以及按群配置的入群欢迎语（含定时撤回）。 |
 
 插件是**独立的仓库**：clone 到本仓库的 `plugins/` 下即被加载（也可以放到别处再
 `ln -s` 进来）。
 
 ```bash
-git clone https://github.com/<you>/ncqqpy-plugin-ai-chat plugins/ai_chat
+git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ```
 
 写自己的插件见 [`docs/plugin-dev.md`](docs/plugin-dev.md)：生命周期、命令/Schema、

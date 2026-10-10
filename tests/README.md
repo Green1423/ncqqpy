@@ -21,7 +21,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 打印 `⏭️ 跳过` 而不是失败；把插件仓库 clone 到 `plugins/<插件名>/` 下即恢复全量：
 
 ```bash
-git clone https://github.com/<you>/ncqqpy-plugin-bupt-news plugins/bupt_news
+git clone https://github.com/Green1423/ncqqpy-plugin-bupt-news plugins/bupt_news
 ```
 
 插件的测试套件在**各自的插件仓库**里（例如 ai_chat 的历史/渲染/搜索套件）。

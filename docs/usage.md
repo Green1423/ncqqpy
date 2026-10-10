@@ -28,7 +28,7 @@
 ```bash
 pip install ncqqpy
 # 或从源码
-git clone https://github.com/<you>/ncqqpy && cd ncqqpy
+git clone https://github.com/Green1423/ncqqpy && cd ncqqpy
 pip install -e .
 ```
 
