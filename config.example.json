@@ -1,0 +1,45 @@
+{
+  "ws_url": "ws://127.0.0.1:3001",
+  "token": "",
+  "plugin_dir": "./plugins",
+  "superusers": [
+    123456789
+  ],
+  "command_prefixes": [
+    "/",
+    "#"
+  ],
+  "bound_groups": [
+    123456789
+  ],
+  "all_groups": false,
+  "api_delay": [
+    1.0,
+    5.0
+  ],
+  "reconnect_interval": 5.0,
+  "max_reconnect_interval": 60.0,
+  "short_connection_threshold": 3.0,
+  "offline_hold_timeout": 0,
+  "offline_queue_max": 1000,
+  "restart_enabled": true,
+  "restart_command": "systemctl restart ncqq",
+  "restart_mode": "systemd",
+  "restart_timeout": 60.0,
+  "restart_cooldown": 60.0,
+  "restart_clear_cache_dir": "/opt/ncqq/napcat/cache",
+  "watchdog_enabled": true,
+  "watchdog": {},
+  "error_report": {
+    "enabled": true,
+    "throttle_seconds": 60,
+    "show_reason": true,
+    "notify_superusers": true
+  },
+  "plugins": {
+    "ai_chat": {},
+    "bupt_news": {},
+    "byrdocs": {},
+    "essential": {}
+  }
+}
