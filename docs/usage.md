@@ -26,9 +26,9 @@
 ### 1.1 安装
 
 ```bash
-pip install napcat-py
+pip install ncqqpy
 # 或从源码
-cd napcat-py
+git clone https://github.com/<you>/ncqqpy && cd ncqqpy
 pip install -e .
 ```
 
