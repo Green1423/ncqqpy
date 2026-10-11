@@ -1,12 +1,57 @@
 # 服务器看门狗（框架内置）
 
-> **它现在是框架能力，不是插件。** 代码在 `napcat/watchdog.py`（状态机）、
-> `napcat/launcher.py`（拉起+清 cache）、`napcat/ilink/`（微信通道）、
-> `napcat/qr_text.py` / `qr_image.py`（二维码编码与放大）。
-> 配置在 `config.json` **顶层**（`watchdog_enabled` / `watchdog.*` / `restart_*`），
+> **它现在是框架能力，不是插件。** 代码在 [napcat/watchdog.py](../napcat/watchdog.py)（状态机）、
+> [napcat/launcher.py](../napcat/launcher.py)（拉起+清 cache）、[napcat/ilink/](../napcat/ilink/)（微信通道）、
+> [napcat/qr_text.py](../napcat/qr_text.py) / [qr_image.py](../napcat/qr_image.py)（二维码编码与放大）。
+> 配置在 [config.json](../config.json) **顶层**（`watchdog_enabled` / `watchdog.*` / `restart_*`），
 > 不再是 `plugins.ncqq_watchdog`。登录命令：`python -m napcat.ilink_login`。
+>
+> 文档索引：[docs/README.md](README.md)
 
-## 恢复流程（唯一状态机）
+## 目录
+
+1. [它做什么](#一它做什么)
+2. [恢复流程（唯一状态机）](#二恢复流程唯一状态机)
+    - [2.1 触发方式](#21-触发方式)
+    - [2.2 二维码是怎么递的](#22-二维码是怎么递的)
+    - [2.3 主动健康检查](#23-主动健康检查)
+    - [2.4 二维码发出后：重连固定 5 秒](#24-二维码发出后重连固定-5-秒)
+    - [2.5 触发去重](#25-触发去重)
+    - [2.6 重启次数默认不限](#26-重启次数默认不限)
+    - [2.7 iLink 发送失败会重试](#27-ilink-发送失败会重试)
+    - [2.8 登录成功反馈](#28-登录成功反馈)
+    - [2.9 抖动是怎么被压住的](#29-抖动是怎么被压住的)
+3. [涉及的文件](#三涉及的文件)
+4. [启用步骤](#四启用步骤)
+    - [4.1 让运行机器人的用户能重启 ncqq（**需要 root 执行一次**）](#41-让运行机器人的用户能重启-ncqq需要-root-执行一次)
+    - [4.2 扫码登录微信 iLink（**只做一次**）](#42-扫码登录微信-ilink只做一次)
+    - [4.3 让 bot 拿到 `context_token`](#43-让-bot-拿到-context_token)
+    - [4.4 重启 ncqqpy 让改动生效](#44-重启-ncqqpy-让改动生效)
+5. [配置](#五配置)
+    - [5.1 顶层（框架行为，`config.json`）](#51-顶层框架行为configjson)
+    - [5.2 看门狗（`config.json → watchdog`）](#52-看门狗configjson--watchdog)
+6. [命令](#六命令)
+7. [测试](#七测试)
+8. [已知边界](#八已知边界)
+
+---
+
+## 一、它做什么
+
+| 时机 | 动作 |
+|------|------|
+| WebSocket **连不上**（服务器没上线） | 执行 `restart_command` 拉起服务端（**每轮只拉一次**），并发微信通知 |
+| WebSocket **连上后又断开** | 同上；断开说明 QQ/服务端出问题了 |
+| **掉线持续超过观察期** | 发「掉线」通知（抖动不发，见 [§2.9](#29-抖动是怎么被压住的)） |
+| **恢复** | 报平安（含掉线时长、原因、拉起结果）——仅当确实发过掉线通知 |
+| **每次拉起服务端之后** | 等新 `qrcode.png` 出现并**放大后发到微信** —— 重启 QQ 必然要重新扫码 |
+| 恢复后出现**新的** `qrcode.png` | 同上（**但只在刚重启过的时间窗内**，见 [§2.2](#22-二维码是怎么递的)） |
+| **登录成功** | 发一条「QQ 已登录成功，二维码已失效」的反馈 |
+| 拉起命令**执行失败** | 追加一条告警（含可操作建议），避免你干等 |
+
+---
+
+## 二、恢复流程（唯一状态机）
 
     websocket 断开
       → 重启 ncqq（先清 cache，再执行 restart_command）
@@ -19,7 +64,7 @@
 由 `Watchdog._run_episode()` 单任务顺序推进；框架回调只置位
 （`_kick_episode()` 掉线 / `_on_reconnected()` 恢复），不再有多条并行路径抢二维码。
 
-### 触发方式
+### 2.1 触发方式
 
 | 触发 | 配置 | 说明 |
 |------|------|------|
@@ -32,20 +77,7 @@
 
 两者共用 `_run_episode()`，由 `_run_loop()` 串行调度，所以不会并发抢二维码。
 
-## 一、它做什么
-
-| 时机 | 动作 |
-|------|------|
-| WebSocket **连不上**（服务器没上线） | 执行 `restart_command` 拉起服务端（**每轮只拉一次**），并发微信通知 |
-| WebSocket **连上后又断开** | 同上；断开说明 QQ/服务端出问题了 |
-| **掉线持续超过观察期** | 发「掉线」通知（抖动不发，见下） |
-| **恢复** | 报平安（含掉线时长、原因、拉起结果）——仅当确实发过掉线通知 |
-| **每次拉起服务端之后** | 等新 `qrcode.png` 出现并**放大后发到微信** —— 重启 QQ 必然要重新扫码 |
-| 恢复后出现**新的** `qrcode.png` | 同上（**但只在刚重启过的时间窗内**，见下） |
-| **登录成功** | 发一条「QQ 已登录成功，二维码已失效」的反馈 |
-| 拉起命令**执行失败** | 追加一条告警（含可操作建议），避免你干等 |
-
-### 二维码是怎么递的
+### 2.2 二维码是怎么递的
 
 **拉起前清空 cache → 等 20 秒 → 直接发。** 不需要判断新旧。
 
@@ -63,7 +95,7 @@
 > `ExecStartPre=-/bin/rm -rf /opt/ncqq/napcat/cache`，然后
 > `sudo systemctl daemon-reload`。这样任何来源的重启都会先清 cache。
 
-插件侧只剩三步：
+发码只剩三步：
 
 | 步骤 | 说明 |
 |------|------|
@@ -77,7 +109,7 @@
 > `二维码比本次拉起更早 … 检查 cache 是否被清空`，但**仍会发送** ——
 > 宁可多发一张作废的码，也不冒漏发的风险。
 
-### 主动健康检查
+### 2.3 主动健康检查
 
 `_health_loop()` 每 `health_interval`（默认 5s）调一次 `get_status`：
 
@@ -93,14 +125,14 @@
 [watchdog] 账号状态异常，按「断联」处理：online=False good=True
 ```
 
-### 二维码发出后：重连固定 5 秒
+### 2.4 二维码发出后：重连固定 5 秒
 
 二维码递到用户手上后，`_set_scan_waiting(True)` 会让 WebSocket 期间**固定每
 `qrcode_scan_retry_interval`（默认 5s）重连一次**，不做指数退避 ——
 否则退避到 60s 时，用户扫完还要干等一分钟才恢复。登录成功（`_mark_online`）
 后自动退出该模式，恢复常规退避。
 
-### 触发去重（曾经在这里翻过车）
+### 2.5 触发去重
 
 `_kick_episode()` 判断的是「**当前有没有恢复流程在跑**」，不是
 `_mark_offline()` 的返回值。后者在掉线期间恒为 False（`_offline_since` 会一直
@@ -111,7 +143,7 @@
 另外不限次数时，一轮跑完（暂时放弃）会复位掉线标记，好让下一条告警能重新开始；
 设置上限时则保持「已放弃」状态，真正停下来等人工介入。
 
-### 重启次数默认不限
+### 2.6 重启次数默认不限
 
 `max_restart_cycles: 0`（默认）= **不限次数**：每轮「重启 ncqq → 等二维码 → 发码 →
 等登录（`connect_timeout`，默认 **1 分钟**）」失败后继续下一轮，直到连上为止。
@@ -121,7 +153,7 @@
   才提示一次「已连续重启 N 轮仍未登录成功，继续重试中…」；
 - 设成正数（如 `2`）即恢复旧行为：跑满就停下并提示需要人工介入。
 
-### iLink 发送失败会重试
+### 2.7 iLink 发送失败会重试
 
 二维码、掉线通知、登录成功反馈都走带重试的发送（`send_text_retry` /
 `send_image_retry`）：
@@ -135,7 +167,7 @@
   （没凭据 / 没 target）立即返回，否则会白等满 timeout；
 - 重试成功会记一条 `微信通知第 N 次尝试成功`；超时放弃记 `重试 N 次仍未成功，放弃`。
 
-### 登录成功反馈
+### 2.8 登录成功反馈
 
 WebSocket 恢复意味着 `get_login_info` 成功 —— 也就是 QQ 登录态可用。此时如果
 登录那一刻的二维码指纹没有再变过（没有刷新出新码），就说明确实登进去了，
@@ -149,7 +181,7 @@ WebSocket 恢复意味着 `get_login_info` 成功 —— 也就是 QQ 登录态�
 
 由 `notify.on_login_ok` 控制，并有 120s 冷却，避免连接抖动时反复报「登录成功」。
 
-### 抖动是怎么被压住的
+### 2.9 抖动是怎么被压住的
 
 实测日志里出现过这种形态（每 6 秒一轮，持续 30+ 轮）：
 
@@ -175,25 +207,27 @@ WebSocket 已连接 → 重连成功（第 31 次连接） → 连接已关闭: 
 
 ---
 
-## 二、涉及的文件
+## 三、涉及的文件
 
 | 文件 | 作用 |
 |------|------|
-| `napcat/launcher.py` | **框架层**：按配置拉起服务端（systemd / launcher 两种模式） |
-| `napcat/client.py` | `WsHandler` 新增 `on_connect_failed` / `on_connected` / `on_disconnected` 回调；客户端新增 `on_ws_*` 注册接口、`ws_connected`、`launcher` |
-| `napcat/plugin.py` | 插件现在能拿到 `self.client`（读取连接状态、拉起结果） |
-| `plugins/ncqq_watchdog/` | 插件本体 |
-| `plugins/ncqq_watchdog/ilink/` | 微信 iLink Bot 协议客户端（**纯标准库**，支持扫码登录/发文本/发图片） |
-| `plugins/ncqq_watchdog/qr_text.py` | QR 编码器（把二维码链接画成 ASCII/PNG） |
-| `plugins/ncqq_watchdog/qr_image.py` | PNG 解码 + 最近邻放大（把 NapCat 的 147×147 小图放大到能扫） |
-| `plugins/ncqq_watchdog/notifier.py` | 微信通知通道（所有失败只记日志，不影响主流程） |
-| `tests/test_watchdog.py` | 端到端测试（真起 WebSocket 服务端 + 真执行进程） |
+| [napcat/watchdog.py](../napcat/watchdog.py) | **状态机**：`Watchdog._run_episode()` 单任务推进恢复流程、健康检查、二维码递送与去重 |
+| [napcat/launcher.py](../napcat/launcher.py) | **框架层**：按配置拉起服务端（systemd / launcher 两种模式） |
+| [napcat/client.py](../napcat/client.py) | `WsHandler` 新增 `on_connect_failed` / `on_connected` / `on_disconnected` 回调；客户端新增 `on_ws_*` 注册接口、`ws_connected`、`launcher` |
+| [napcat/plugin.py](../napcat/plugin.py) | 插件现在能拿到 `self.client`（读取连接状态、拉起结果） |
+| [napcat/ilink/](../napcat/ilink/) | 微信 iLink Bot 协议客户端（**纯标准库**，支持扫码登录/发文本/发图片） |
+| [napcat/ilink/notifier.py](../napcat/ilink/notifier.py) | 微信通知通道（所有失败只记日志，不影响主流程） |
+| [napcat/qr_text.py](../napcat/qr_text.py) | QR 编码器（把二维码链接画成 ASCII/PNG） |
+| [napcat/qr_image.py](../napcat/qr_image.py) | PNG 解码 + 最近邻放大（把 NapCat 的 147×147 小图放大到能扫） |
+| [napcat/ilink_login.py](../napcat/ilink_login.py) | 扫码登录入口（`python -m napcat.ilink_login`） |
+| [plugins/ncqq_watchdog/](../plugins/ncqq_watchdog/) | 退役插件的残留目录（只剩 `data/`，不再是代码位置） |
+| [tests/test_watchdog.py](../tests/test_watchdog.py) | 端到端测试（真起 WebSocket 服务端 + 真执行进程） |
 
 ---
 
-## 三、启用步骤
+## 四、启用步骤
 
-### 1) 让运行机器人的用户能重启 ncqq（**需要 root 执行一次**）
+### 4.1 让运行机器人的用户能重启 ncqq（**需要 root 执行一次**）
 
 > 下面的 `botuser` 是**占位符**，换成实际运行机器人的用户名（`whoami` 即是）。
 
@@ -238,7 +272,7 @@ echo 'botuser ALL=(root) NOPASSWD: /usr/bin/systemctl restart ncqq' \
 sudo chmod 440 /etc/sudoers.d/ncqq-watchdog
 ```
 
-然后把 `config.json` 改成：
+然后把 [config.json](../config.json) 改成：
 
 ```json
 { "restart_mode": "launcher", "restart_command": "sudo -n systemctl restart ncqq" }
@@ -247,20 +281,19 @@ sudo chmod 440 /etc/sudoers.d/ncqq-watchdog
 > 本机 `/etc/sudo.conf` 的属主不是 root，sudo 当前直接拒绝运行
 > （`sudo: no new privileges flag is set`），所以**方案 A 更稳**。
 
-### 2) 扫码登录微信 iLink（**只做一次**）
+### 4.2 扫码登录微信 iLink（**只做一次**）
 
 ```bash
-cd /ncqqpy && ./venv-arm/bin/python -m plugins.ncqq_watchdog.login
+cd /ncqqpy && ./venv-arm/bin/python -m napcat.ilink_login
 ```
 
 终端会直接画出二维码（iLink 返回的是 H5 页面链接，不是图片，所以本地编码），
-用微信扫码确认即可。凭据写到 `plugins/ncqq_watchdog/data/ilink_credentials.json`
-（权限 600）。
+用微信扫码确认即可。凭据写到 `napcat/data/ilink_credentials.json`（权限 600）。
 
-### 3) 让 bot 拿到 `context_token`
+### 4.3 让 bot 拿到 `context_token`
 
 iLink 协议要求主动推送必须带 `context_token`，而这个 token **只出现在入站消息里**，
-所以：**用微信给这个 bot 发一条任意消息**。插件后台常驻长轮询，收到后会把它落盘缓存，
+所以：**用微信给这个 bot 发一条任意消息**。看门狗后台常驻长轮询，收到后会把它落盘缓存，
 之后就能主动推送了。日志里会看到：
 
 ```
@@ -270,10 +303,10 @@ iLink 协议要求主动推送必须带 `context_token`，而这个 token **只�
 把日志里那个 id 填进配置即可（或用 `/watchdog target <id>`）：
 
 ```json
-"plugins": { "ncqq_watchdog": { "wechat": { "target": "xxx@im.wechat" } } }
+"watchdog": { "wechat": { "target": "xxx@im.wechat" } }
 ```
 
-### 4) 重启 ncqqpy 让插件生效
+### 4.4 重启 ncqqpy 让改动生效
 
 > ⚠️ **框架改动（`napcat/`）必须重启进程才生效**。插件的热重载只重载 `plugins/` 下的
 > 代码；正在运行的 `WsHandler` 还是旧代码，退避/稳定连接判定都不会更新。
@@ -285,9 +318,9 @@ sudo systemctl restart ncqqpy     # 或 /reload（QQ 私聊里）
 
 ---
 
-## 四、配置
+## 五、配置
 
-### 顶层（框架行为，`config.json`）
+### 5.1 顶层（框架行为，`config.json`）
 
 | 键 | 默认 | 说明 |
 |----|------|------|
@@ -308,7 +341,7 @@ sudo systemctl restart ncqqpy     # 或 /reload（QQ 私聊里）
 > 如果你的部署里没有 systemd 托管，把 `restart_mode` 设成 `launcher`、
 > `restart_command` 设成 `bash /opt/ncqq/launcher.sh` 即可。
 
-### 插件（`plugins.ncqq_watchdog`）
+### 5.2 看门狗（`config.json → watchdog`）
 
 | 键 | 默认 | 说明 |
 |----|------|------|
@@ -344,7 +377,7 @@ sudo systemctl restart ncqqpy     # 或 /reload（QQ 私聊里）
 
 ---
 
-## 五、命令
+## 六、命令
 
 | 命令 | 说明 |
 |------|------|
@@ -357,7 +390,9 @@ sudo systemctl restart ncqqpy     # 或 /reload（QQ 私聊里）
 
 ---
 
-## 六、测试
+## 七、测试
+
+自检脚本 [`tests/test_watchdog.py`](../tests/test_watchdog.py)：
 
 ```bash
 cd /ncqqpy && ./venv-arm/bin/python tests/test_watchdog.py
@@ -375,12 +410,12 @@ cd /ncqqpy && ./venv-arm/bin/python tests/test_watchdog.py
 （真连接失败 → 真执行拉起脚本 → 脚本重写二维码 → 插件自动发到微信）。
 
 > 测试用 `NCQQ_WATCHDOG_DATA_DIR` 把插件数据目录指到临时目录：
-> 否则测试会把「已递指纹」写进 `plugins/ncqq_watchdog/data/`，
+> 否则测试会把「已递指纹」写进 `napcat/data/`，
 > 既污染生产状态，也会让后续测试因去重命中而假失败。
 
 ---
 
-## 七、已知边界
+## 八、已知边界
 
 - **微信通道依赖 iLink**：登录态过期（`errcode=-14`）后需要重新扫码；通知器会把这条错误写进日志与
   `/watchdog status`。

@@ -144,6 +144,24 @@ class PluginLifecycleError(PluginError):
     audience = "operator"
 
 
+class PluginDependencyError(PluginError):
+    """插件依赖不满足或依赖声明非法（必需依赖缺失/未启用/版本不符、声明成环…）。
+
+    受众是**超管**：缺的是另一个插件，问触发者没有意义，该装/该启用的也是运维。
+    插件侧也能用它做运行期兜底（见 `_DepsProxy.require`）。
+    """
+
+    kind = "插件依赖未满足"
+    audience = "operator"
+
+    def __init__(self, message: str = "", *, plugin: str = "",
+                 missing: Optional[list[str]] = None,
+                 cause: Optional[BaseException] = None):
+        super().__init__(message, plugin=plugin, cause=cause)
+        #: 缺哪些依赖（留给调用方做后续动作，比如「提示一键安装」）
+        self.missing = list(missing or [])
+
+
 class CommandExecutionError(PluginError):
     """命令执行失败，且**原因可以展示给用户**。
 

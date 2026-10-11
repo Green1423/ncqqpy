@@ -54,6 +54,7 @@ from .errors import (
     NapCatError, PluginError, PluginRuntimeError, PluginConfigError,
     PluginExternalError, PluginTimeoutError, PluginRateLimitError,
     PluginAccessError, PluginLoadError, PluginLifecycleError,
+    PluginDependencyError,
     ErrorReporter, error_code, short_reason,
 )
 from .file_manager import FileManager
@@ -100,6 +101,7 @@ __all__ = [
     "NapCatError", "PluginError", "PluginRuntimeError", "PluginConfigError",
     "PluginExternalError", "PluginTimeoutError", "PluginRateLimitError",
     "PluginAccessError", "PluginLoadError", "PluginLifecycleError",
+    "PluginDependencyError",
     "ErrorReporter", "error_code", "short_reason",
     # File
     "FileManager",

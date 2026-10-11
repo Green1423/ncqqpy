@@ -1,6 +1,69 @@
 # ncqqpy 插件开发文档
 
-> 版本 1.3.0
+> 版本 1.4.0
+>
+> 文档索引：[docs/README.md](README.md)
+
+## 目录
+
+1. [插件概述](#一插件概述)
+    - [1.1 最小插件](#11-最小插件)
+    - [1.2 插件生命周期](#12-插件生命周期)
+    - [1.3 声明依赖别的插件（必需 / 可选）](#13-声明依赖别的插件必需--可选)
+2. [插件可用资源](#二插件可用资源)
+    - [2.1 快捷方法](#21-快捷方法)
+    - [2.2 读取连接状态 / 拉起结果（`self.client`）](#22-读取连接状态--拉起结果selfclient)
+3. [消息事件处理](#三消息事件处理)
+    - [3.1 动态卸载（事件/命令/定时器）](#31-动态卸载事件命令定时器)
+    - [3.2 基础消息处理](#32-基础消息处理)
+    - [3.3 指定事件类型](#33-指定事件类型)
+4. [命令注册](#四命令注册)
+    - [4.1 基础命令](#41-基础命令)
+    - [4.2 带 Schema 验证的命令](#42-带-schema-验证的命令)
+    - [4.3 `register_command` 参数](#43-register_command-参数)
+    - [4.3.1 占位符记号（全框架统一）](#431-占位符记号全框架统一)
+    - [4.3.2 命令函数的签名（无 schema 时只有一个 `packet`）](#432-命令函数的签名无-schema-时只有一个-packet)
+    - [4.4 子命令（Subcommands）](#44-子命令subcommands)
+    - [4.5 命令处理函数参数绑定](#45-命令处理函数参数绑定)
+    - [4.6 命令返回值](#46-命令返回值)
+    - [4.7 回复要回到「消息来的地方」](#47-回复要回到消息来的地方)
+    - [4.8 给整组命令加一道自己的闸门（服务范围 / 白名单）](#48-给整组命令加一道自己的闸门服务范围--白名单)
+    - [4.9 字符串参数的引号与转义](#49-字符串参数的引号与转义)
+    - [4.10 Schema 字段类型](#410-schema-字段类型)
+5. [全部事件类型](#五全部事件类型)
+    - [5.1 MessageEvent 常用属性](#51-messageevent-常用属性)
+6. [全部 API 方法](#六全部-api-方法)
+    - [6.1 消息](#61-消息)
+    - [6.2 好友/用户](#62-好友用户)
+    - [6.3 群组](#63-群组)
+    - [6.4 文件](#64-文件)
+    - [6.5 系统/扩展](#65-系统扩展)
+    - [6.6 错误处理](#66-错误处理)
+7. [权限管理](#七权限管理)
+    - [7.1 角色层级](#71-角色层级)
+    - [7.2 命令权限绑定](#72-命令权限绑定)
+    - [7.3 手动权限检查](#73-手动权限检查)
+    - [7.4 自定义权限节点](#74-自定义权限节点)
+    - [7.5 运行时权限覆盖（`/perm` + `command_permissions`）](#75-运行时权限覆盖perm--command_permissions)
+8. [消息构造](#八消息构造)
+9. [定时任务](#九定时任务)
+10. [文件管理](#十文件管理)
+11. [完整插件示例](#十一完整插件示例)
+12. [热重载](#十二热重载)
+    - [12.1 从 GitHub 装卸插件（`plugin_manager`）](#121-从-github-装卸插件plugin_manager)
+13. [插件包结构](#十三插件包结构)
+14. [配置管理](#十四配置管理)
+    - [14.1 config.json](#141-configjson)
+    - [14.2 bind / unbind 自动持久化](#142-bind--unbind-自动持久化)
+    - [14.3 插件配置](#143-插件配置)
+        - [14.3.1 首次运行即初始化全部配置项（`config_template()`）](#1431-首次运行即初始化全部配置项config_template)
+    - [14.4 ConfigManager API](#144-configmanager-api)
+15. [错误处理与用户反馈](#十五错误处理与用户反馈)
+    - [15.1 三种写法，按你掌握的信息量选](#151-三种写法按你掌握的信息量选)
+    - [15.2 错误类型速查（`from napcat import ...`）](#152-错误类型速查from-napcat-import-)
+    - [15.3 框架怎么反馈](#153-框架怎么反馈)
+    - [15.4 配置（`config.json` 顶层）](#154-配置configjson-顶层)
+    - [15.5 插件作者要守的两条](#155-插件作者要守的两条)
 
 ---
 
@@ -48,6 +111,59 @@ PluginManager.unload()
 - **`on_disable`**: 插件停用时调用。通过 `self.on_message` / `self.on_event` 注册的处理器**自动取消**。
 - **`on_unload`**: 插件卸载时调用。释放文件句柄、关闭连接等。
 
+### 1.3 声明依赖别的插件（必需 / 可选）
+
+插件可以声明自己依赖哪些插件，框架负责**加载顺序**、**缺依赖时不加载**与
+**反向保护**（别人在用的插件不能被悄悄卸掉）：
+
+```python
+class ReportPlugin(PluginBase):
+    name = "report"
+    version = "1.0.0"
+
+    # 必需依赖：没装/没启用 → **本插件不加载**，原因私聊超管
+    requires = ["store", "ai_chat>=1.2"]
+
+    # 可选依赖：有就用、没有照常跑（`self.deps.get(...)` 拿到 None）
+    optional_requires = ["weather"]
+
+    async def on_load(self):
+        store = self.deps.require("store")      # 必需依赖，加载期已保证在
+        weather = self.deps.get("weather")      # 可选依赖：可能没有
+        if weather is not None:
+            ...                                 # 有天气插件就用它
+```
+
+| 概念 | 语义 |
+|------|------|
+| `requires` | 必需依赖。缺失/**未启用**/版本不符 → 本插件**不加载**（不构造实例），原因私聊超管，`/plugins` 里显示 `[⛔] 名字 —— 缺少 X` |
+| `optional_requires` | 可选依赖。缺失不算失败，只是装/卸时的提示；都装了则保证依赖先加载 |
+| `名字>=版本` | 版本要求（`>=` `>` `<=` `<` `==` `!=`，按数字段比较：`1.10 > 1.9`）。版本取对方声明的 `version`，可用 `provides_version` 覆盖 |
+| `self.deps` | 依赖访问代理：`get(name)` / `has(name)` / `enabled(name)` / `require(name)` / `names()`；也支持 `name in self.deps` |
+| `self.dependency_check()` | 现场自查（`DependencyCheck`：`ok` / `reason()` / `missing` / `disabled` / `version_mismatch`）|
+
+框架侧保证的四件事（都有测试：[tests/test_plugin_deps.py](../tests/test_plugin_deps.py)）：
+
+1. **加载顺序 = 拓扑序**：`load_all()` / `enable_all()` 都按「依赖在前」执行，
+   可选依赖也参与排序（有就先生效）；`shutdown()` 反过来（使用者先走）。
+   同层按字典序，顺序稳定可测。**必需依赖成环会在加载期报错**，
+   可选依赖成环则自动摘掉一条可选边（软约束不该让整批插件起不来）。
+2. **缺依赖 = 不加载，而不是半死不活**：`on_load` 都不会跑（构造期也不构造，
+   所以 `config_template()` 不会写盘）。依赖装上/启用后**会自动加载**
+   （watcher 2 秒内重试，`/plugin` 装完依赖后立刻重试）。
+3. **不能拆别人的台**：还有已启用插件依赖它时，`unload()` / `disable()` 默认
+   拒绝（返回 False + 日志）；`force=True` 才按「使用者在前」级联。运维侧
+   `/plugin uninstall` 会提示先卸载使用者。
+4. **重载会级联**：重载 `store` 之后，持有旧实例的 `report` 会跟着重载
+   （否则它 `self.deps.get("store")` 拿到的是已经解绑的死对象）。
+
+几条约定（写错会在加载期被明确拒绝，不会拖到运行期）：
+
+- 依赖名必须是合法插件名（字母/下划线开头，只含字母数字下划线）；
+- **不能依赖自己**，也不能同一个插件**同时**写在 `requires` 和
+  `optional_requires` 里（语义矛盾）；
+- 同名依赖写两遍时**带版本要求的那条赢**（与书写顺序无关）。
+
 ---
 
 ## 二、插件可用资源
@@ -63,9 +179,44 @@ PluginManager.unload()
 | `self.perm` | `PermissionManager` | 权限管理器 |
 | `self.files` | `FileManager` | 文件管理器 |
 | `self.logger` | `Logger` | Python 标准 Logger |
-| `self.errors` | `ErrorReporter` | **错误反馈业主**：`render()` / `report()` / `log()`，见 §十五 |
+| `self.errors` | `ErrorReporter` | **错误反馈器**：`render()` / `report()` / `log()`，见 [§十五](#十五错误处理与用户反馈) |
+| `self.deps` | `_DepsProxy` | **依赖访问**：`get()` / `has()` / `enabled()` / `require()`，见 [§1.3](#13-声明依赖别的插件必需--可选) |
 | `self._groups` | `GroupBinding` | 群组绑定管理器 |
-| `self.client` | `NapCatClient` | 主客户端（连接状态、`launcher` 等；见 2.2） |
+| `self.client` | `NapCatClient` | 主客户端（连接状态、`launcher` 等；见 [§2.2](#22-读取连接状态--拉起结果selfclient)） |
+
+### 2.1 快捷方法
+
+| 方法 | 说明 |
+|------|------|
+| `self.on_message(group_id=..., private=...)` | 注册消息事件处理器 |
+| `self.on_event(EventType)` | 注册指定类型事件处理器 |
+| `self.off_event(EventType, handler)` | 取消注册指定事件处理器 |
+| `self.off_all_events()` | 取消注册本插件全部事件 |
+| `self.register_command(name, **kwargs)` | 注册命令 |
+| `self.unregister_command(name)` | 取消注册命令 |
+| `self.schedule(seconds, name=...)` | 注册周期定时任务 |
+| `self.schedule_at("HH:MM", name=...)` | 注册每日定时任务 |
+| `self.cancel_schedule(name)` | 取消指定名称的定时任务 |
+| `self.bind_group(gid)` | 绑定群 |
+| `self.unbind_group(gid)` | 解绑群 |
+| `self.is_group_bound(gid)` | 检查群是否已绑定 |
+| `self.bound_groups` | 已绑定群列表（property） |
+| `self.stop_event(hid)` | 移除指定事件监听器（按注册时的 `hid`）|
+| `self.dependency_check()` | 现场自查依赖是否满足（见 [§1.3](#13-声明依赖别的插件必需--可选)）|
+| `self.pause_event(hid)` | 暂停指定事件监听器 |
+| `self.resume_event(hid)` | 恢复指定事件监听器 |
+| `self.stop_command(name)` | 删除指定命令 |
+| `self.pause_command(name)` | 启用/禁用命令（toggle，禁用后返回"命令不存在"） |
+| `self.stop_timer(name)` | 取消指定定时任务 |
+| `self.pause_timer(name)` | 暂停指定定时任务 |
+| `self.resume_timer(name)` | 恢复指定定时任务 |
+
+> **框架自动回收的范围**（不用自己写清理代码）：
+> `unload()` 时会撤销本插件注册的**全部**事件处理器、**定时任务**与**命令**
+> （按注册时打的归属标签，不看命名约定）。
+> `on_disable()` 只撤销事件处理器 —— 停用但没卸载时，定时任务与命令仍归插件自己管
+> （[§3.1](#31-动态卸载事件命令定时器) 的写法仍然有效，重复回收是空操作）。
+> 加载失败或 `on_enable` 抛异常时，这一次已经注册的东西会被框架回滚干净。
 
 ### 2.2 读取连接状态 / 拉起结果（`self.client`）
 
@@ -93,51 +244,19 @@ class MyPlugin(PluginBase):
 |------|------|
 | `self.client.ws_connected` | 当前 WebSocket 是否可用 |
 | `self.client.launcher` | `ServerLauncher`，`status()` 返回拉起次数/模式/最近结果 |
-| `self.client.launcher.launch(reason)` | 手动拉起服务端（配置见 `config.json` 顶层的 `restart_*`） |
+| `self.client.launcher.launch(reason)` | 手动拉起服务端（配置见 [config.json](../config.json) 顶层的 `restart_*`） |
 
 > 框架自身的拉起逻辑：连不上时按 `restart_command` 拉起服务端，**每轮连续失败只拉一次**，
 > 并在后台 task 里执行（不阻塞重连循环）。该逻辑现在是框架内置的
-> （`napcat/watchdog.py`，配置见 `config.json` 的 `watchdog*`）——
-> 历史上的 `plugins/ncqq_watchdog` 插件已退役，只剩 `data/` 目录。
-
-### 2.1 快捷方法
-
-| 方法 | 说明 |
-|------|------|
-| `self.on_message(group_id=..., private=...)` | 注册消息事件处理器 |
-| `self.on_event(EventType)` | 注册指定类型事件处理器 |
-| `self.off_event(EventType, handler)` | 取消注册指定事件处理器 |
-| `self.off_all_events()` | 取消注册本插件全部事件 |
-| `self.register_command(name, **kwargs)` | 注册命令 |
-| `self.unregister_command(name)` | 取消注册命令 |
-| `self.schedule(seconds, name=...)` | 注册周期定时任务 |
-| `self.schedule_at("HH:MM", name=...)` | 注册每日定时任务 |
-| `self.cancel_schedule(name)` | 取消指定名称的定时任务 |
-| `self.bind_group(gid)` | 绑定群 |
-| `self.unbind_group(gid)` | 解绑群 |
-| `self.is_group_bound(gid)` | 检查群是否已绑定 |
-| `self.bound_groups` | 已绑定群列表（property） |
-| `self.stop_event(hid)` | 移除指定事件监听器（按注册时的 `hid`）|
-| `self.pause_event(hid)` | 暂停指定事件监听器 |
-| `self.resume_event(hid)` | 恢复指定事件监听器 |
-| `self.stop_command(name)` | 删除指定命令 |
-| `self.pause_command(name)` | 启用/禁用命令（toggle，禁用后返回"命令不存在"） |
-| `self.stop_timer(name)` | 取消指定定时任务 |
-| `self.pause_timer(name)` | 暂停指定定时任务 |
-| `self.resume_timer(name)` | 恢复指定定时任务 |
-
-> **框架自动回收的范围**（不用自己写清理代码）：
-> `unload()` 时会撤销本插件注册的**全部**事件处理器、**定时任务**与**命令**
-> （按注册时打的归属标签，不看命名约定）。
-> `on_disable()` 只撤销事件处理器 —— 停用但没卸载时，定时任务与命令仍归插件自己管
-> （文档 §3.0 的写法仍然有效，重复回收是空操作）。
-> 加载失败或 `on_enable` 抛异常时，这一次已经注册的东西会被框架回滚干净。
+> （[napcat/watchdog.py](../napcat/watchdog.py)，配置见 [config.json](../config.json) 的
+> `watchdog*`；完整说明见 [ncqq-watchdog.md](ncqq-watchdog.md)）——
+> 历史上的 `plugins/ncqq_watchdog` 插件已退役，只剩 [data/](../plugins/ncqq_watchdog/data/) 目录。
 
 ---
 
 ## 三、消息事件处理
 
-### 3.0 动态卸载（事件/命令/定时器）
+### 3.1 动态卸载（事件/命令/定时器）
 
 ```python
 from napcat import normalize_text          # 归一化入口（框架统一提供）
@@ -165,7 +284,7 @@ class MyPlugin(PluginBase):
         async def hourly(): ...
 ```
 
-### 3.1 基础消息处理
+### 3.2 基础消息处理
 
 ```python
 from napcat import PluginBase, MessageEvent, MessageChain
@@ -194,7 +313,7 @@ class MyPlugin(PluginBase):
             )
 ```
 
-### 3.2 指定事件类型
+### 3.3 指定事件类型
 
 ```python
 from napcat import (
@@ -310,10 +429,10 @@ async def cmd_ban(params, event):
     return f"已禁言 {params.user_id}"
 ```
 
-> ⚠️ **签名写错不会静默了，但也别指望它好看。** 例如无 schema 的命令写成
+> ⚠️ **签名写错不会静默。** 例如无 schema 的命令写成
 > `async def cmd_ping(params, event)`：`params` 拿不到值 → 实参为空 → 调用时
 > `TypeError`。框架把它包成 `PluginRuntimeError`：日志里有命令名 + 完整 traceback，
-> 用户侧收到一句带错误编号的提示（见 §十五）。排查时按编号 grep 日志即可。
+> 用户侧收到一句带错误编号的提示（见 [§十五](#十五错误处理与用户反馈)）。排查时按编号 grep 日志即可。
 
 ### 4.4 子命令（Subcommands）
 
@@ -363,24 +482,11 @@ async def cmd_group_kick(params, event):
 > （`scope` 仍按父命令自己的声明生效：范围不符时连帮助页也不给。）
 > **需要权限的逻辑一律写进子命令** —— 框架在路由到子命令之前按该子命令自己的声明校验。
 
-`/help` 的权限提示以**每条命令自身**的声明为准，与实际拦截口径一致：
-
-- `/help` 列表**只列命令组与没有子命令的命令**，分 `[📦 命令组]` 与 `[📖 命令]` 两段，
-  每行只给「命令名 — 介绍」（**版式与第二级的子命令清单一致，不按权限分段**），且只列
-  调用者有权访问的那些：按各自的 `scope` 与 `permission` 过滤（`scope="private"` 的命令
-  不出现在群聊帮助里；`check_permission` 不通过的也不列）。**用不了的命令直接不出现**，
-  所以不需要 `[👑 superuser]` 之类的权限档标题；**子命令、以及任何命令的用法/参数也都不在
-  这一级**（子命令属于 `/help <命令组>`，叶子命令的用法属于 `/help <命令名>`），
-  `/help <无权限命令>` 按「未知命令」处理；
-- `/help <命令组>` 逐条列出**你有权使用**的子命令：`名字 [权限：xxx · 作用域：…] — 介绍`，
-  如 `/buptnews add [权限：superuser · 作用域：仅私聊] — 添加推送目标`；
-  **不带参数与用法**（这些在下一级），权限或作用域不符的子命令直接不列；
-- `/help <无子命令的命令>` 给出该命令的介绍、**权限/作用域**与用法/参数表；
-- `/help <父命令> <子命令>` 与 `/help <父命令>.<子命令>` **等价**，显示该子命令自身的
-  权限与作用域（含 `scope`）、描述、用法与参数表（**参数只在这里出现**）；第二段不是已注册的
-  子命令时回落到 `/help <父命令>`（`/help perm set` 这类「用法里带取值」的写法照旧给
-  `/perm` 详情）；
-- `/commands`（superuser）是调试视图：命令组本体不报权限，子命令逐条列出自己的范围与说明。
+`/help` 的三级入口、可见性过滤、每个页面各显示什么，见
+[usage.md §6.1.1](usage.md#611-help-三级入口帮助文档的构成) 与
+[usage.md §6.2.3](usage.md#623-help-只列你能用的命令)。插件不需要自己渲染帮助 ——
+注册信息（`description` / `scope` / `permission` / Schema）就是帮助的全部来源；
+调试视图 `/commands`（superuser）逐条列出子命令自己的范围与说明。
 
 帮助文本的排版约定（框架侧）：首行 `📖 <命令>`；**权限与作用域总是写全**，格式
 `权限：xxx · 作用域：仅私聊/仅群聊/所有场景`（由 `describe_requirements()` 生成，
@@ -410,7 +516,7 @@ async def cmd_test(packet, event, api):
     ...
 ```
 
-### 4.5 命令返回值
+### 4.6 命令返回值
 
 - 返回 `str` / `MessageChain` → 自动回复到来源群/私聊
 - 返回 `list[MessageChain]`（或 `list[str]`）→ **按顺序逐条发送**，用于长内容分段
@@ -429,7 +535,7 @@ async def cmd_long(packet):
 `MessageChain.split()` 的保证：文字优先在换行处断开（不破坏排版）、图片/文件段整段搬走、
 分段后顺序与内容与原来一致；客户端发送时断线则停止后续分段（不会刷一堆失败）。
 
-### 4.5.0 回复要回到「消息来的地方」
+### 4.7 回复要回到「消息来的地方」
 
 群里点开的**临时会话（小窗）**是 `message_type="private"` + `sub_type="group"` + `group_id`
 （`event.is_temp_session` 为真）。自己调 API 发消息时别只按 `message_type` 分叉，否则小窗消息会
@@ -445,7 +551,7 @@ else:
 
 命令返回值由框架自动回复，已经处理好了这一点；只有插件自己 `send_xxx` 时才需要注意。
 
-### 4.5.05 给整组命令加一道自己的闸门（服务范围 / 白名单）
+### 4.8 给整组命令加一道自己的闸门（服务范围 / 白名单）
 
 框架的 `permission` 回答的是「这个人有没有资格执行这条命令」，管不了「这个地址/人能不能用
 **这个插件**」（例如「只服务绑定群的小窗 + 指定用户」）。要加这类闸门，别逐条命令手写判断 ——
@@ -488,7 +594,7 @@ def _register_commands(self):
     self.register_command = _register_with_guard
 ```
 
-两个**静默**陷阱（`bupt_news` 的 `binding` 实测全踩过）：
+两个**静默**陷阱：
 
 1. **框架按参数名注入**（`CommandHandler.execute()` 遍历
    `inspect.signature(self.func).parameters`）。`functools.wraps` 会把 `__signature__`
@@ -504,14 +610,14 @@ def _register_commands(self):
 （签名 `(handler, event) -> bool`，可同步可异步；见 `/help` 的可见性过滤），
 否则范围外的用户会看到一份用不了的功能清单。
 
-### 4.5.1 字符串参数的引号与转义
+### 4.9 字符串参数的引号与转义
 
 `StrField` 拿到的是**分词并反转义后**的字符串，写命令时直接提示用户加引号即可：
 含空格的文本用 `"…"` 或 `'…'` 包起来；文本里有单引号就写成 `'don\'t'`（框架在单引号内
 也支持 `\'`；此外 `\n` `\t` `\\` `\"` 都会转义）。引号没配对时框架按空白宽松切分，
 不会让命令报错。
 
-### 4.6 Schema 字段类型
+### 4.10 Schema 字段类型
 
 | Field | Python 类型 | 特性 |
 |-------|-------------|------|
@@ -556,7 +662,7 @@ def _register_commands(self):
 | `FriendRequestEvent` | request | — | 好友请求 |
 | `GroupRequestEvent` | request | — | 群请求/邀请 |
 
-### MessageEvent 常用属性
+### 5.1 MessageEvent 常用属性
 
 | 属性 | 类型 | 说明 |
 |------|------|------|
@@ -739,8 +845,8 @@ async def check_vip(user_id, group_id, is_group):
 - **取值白名单** = `superuser`/`owner`/`admin`/`member` + `public`（公开；`everyone`、`公开`、
   `所有人`、`-` 等价，统一归一化为空串）+ **已注册**的自定义节点。交互设置时未注册的节点
   当场拒绝；`config.json` 里手写的未知节点只记 warning 并保留 —— 该命令对非超级用户不可用。
-- **只作用于框架的命令级权限**，不影响插件内部自做的判定（如 `ai_chat` 的工具级权限、
-  `bupt_news` 的服务范围白名单）。
+- **只作用于框架的命令级权限**，不影响插件内部自做的判定（如 [ai_chat](../plugins/ai_chat/) 的工具级权限、
+  [bupt_news](../plugins/bupt_news/) 的服务范围白名单）。
 - 命令名只支持两级（`父.子`）：三级名现在会显式 `ValueError`
   （旧实现把它静默截断成两级，注册"成功"但名字不是你要的）。
 
@@ -874,6 +980,33 @@ class WelcomePlugin(PluginBase):
 
 关闭自动监控：`client.plugins.stop_watch()`
 
+### 12.1 从 GitHub 装卸插件（`plugin_manager`）
+
+框架自带 [plugins/plugin_manager](../plugins/plugin_manager/)：在**私聊**里以超管身份把插件从 GitHub
+装进来、更新、卸载。插件列表文件放在 `Green1423/ncqqpy-plugins` 的
+`plugins.json`（"有哪些插件、从哪个仓库装、装哪条 ref"全由它决定）。
+
+```
+/plugin list                  看有哪些、装没装
+/plugin install <插件名>       安装（下载 → 校验 → 原子替换 → 热重载）
+/plugin update all            全部更新（本地没动过的文件才覆盖）
+/plugin uninstall <插件名>     卸载（进 plugins/.trash/，可找回）
+```
+
+对自己的插件而言，这意味着三件事：
+
+1. **入口要自洽**：包目录里必须有 `__init__.py`（或单文件 `name.py`），
+   且 `PluginBase` 子类的 `name` 要与列表文件里的插件名一致 ——
+   不一致会被拒绝安装（避免把 ai_chat 装进 bupt_news 的目录）；
+2. **`data/` 是你的运行时目录**：更新时它跟着走、卸载时默认留在原地，
+   所以**配置与会话数据放 `data/` 才是安全的**（放别处会在更新时被当成
+   仓库文件比对）；
+3. **别改仓库里的文件当配置**：手改过的文件会让更新停下来要 `--force=true`。
+   要留自己的改动就新增文件（新文件不在同步范围内，永不删除）。
+
+命令与机制详见 [plugins/plugin_manager/README.md](../plugins/plugin_manager/README.md)；
+列表文件的生成脚本是 [tools/publish_plugins_repo.py](../tools/publish_plugins_repo.py)。
+
 ---
 
 ## 十三、插件包结构
@@ -882,10 +1015,17 @@ class WelcomePlugin(PluginBase):
 plugins/
 ├── welcome/              # 包目录格式（推荐）
 │   ├── __init__.py       # 包含 PluginBase 子类
-│   └── utils.py          # 自定义辅助模块
+│   ├── utils.py          # 自定义辅助模块
+│   └── data/             # 运行时数据（更新时跟着走、卸载时默认保留）
 ├── admin.py              # 单文件格式
-└── _disabled_tag.py      # 以下划线开头 → 跳过加载
+├── _disabled_tag.py      # 以下划线开头 → 跳过加载
+└── .trash/               # plugin_manager 的回收站（`.` 开头 → 不加载）
 ```
+
+> `plugins/` 下以 `.` 或 `_` 开头的目录/文件框架一律跳过（`PluginManager.
+> load_all` 与 `_plugin_names` 的判定），所以装卸过程中的备份目录
+> （`plugins/.trash/`）与半成品目录不会被当成插件加载。
+> 下载解压的暂存区在 `plugins/plugin_manager/data/.staging/`。
 
 ---
 
@@ -893,7 +1033,7 @@ plugins/
 
 ### 14.1 config.json
 
-首次启动自动生成 `config.json`，所有静态配置集中在此：
+首次启动自动生成 [config.json](../config.json)，所有静态配置集中在此：
 
 ```json
 {
@@ -944,7 +1084,7 @@ class MyPlugin(PluginBase):
 
 > 放在构造期而不是加载期，是为了让保证对**任何**构造路径都成立：框架加载、
 > 测试里直接 `MyPlugin(...)`、脚本里手动 new —— 都拿得到完整配置，不依赖调用方
-> 记得补这一步（`tests/test_watchdog.py` 里就有直接 new 插件的用例）。
+> 记得补这一步（[tests/test_watchdog.py](../tests/test_watchdog.py) 里就有直接 new 插件的用例）。
 
 ```python
 class MyPlugin(PluginBase):
@@ -965,7 +1105,7 @@ class MyPlugin(PluginBase):
 | 语义 | 说明 |
 |------|------|
 | **只补缺键** | 已有值（含运维手改的）**一个都不覆盖**；插件升级新增配置项时老部署自动补齐 |
-| **递归补全** | 父键已存在也照样补里面缺的子键 —— `setdefault("llm", {...})` 在用户已配 `llm` 时整段不生效，这个坑踩过不止一次 |
+| **递归补全** | 父键已存在也照样补里面缺的子键 —— `setdefault("llm", {...})` 在用户已配 `llm` 时整段不生效 |
 | **幂等** | 没有缺键就完全不写盘；有缺键也只写一次（不是逐键重写整个文件） |
 | **类型冲突只报告** | 模板要 dict、用户写成了别的类型 → 保留用户值，启动日志里 warning |
 

@@ -18,15 +18,106 @@ from typing import Optional, Type
 
 from .api import ApiClient
 from .config import ConfigFill
+from .deps import (
+    DependencyError, RequirementSpec, check_dependencies, dependency_names,
+    graph, load_order as dep_load_order, unload_order as dep_unload_order,
+    validate_declaration,
+)
 from .events import EventBus, TimerManager
 from .command import CommandManager
 from .permission import PermissionManager
 from .file_manager import FileManager
 from .models import MessageEvent, NapCatEvent
 from .errors import (
-    ErrorReporter, NapCatError, PluginConfigError, PluginError,
-    PluginLifecycleError, PluginLoadError, PluginRuntimeError, short_reason,
+    ErrorReporter, NapCatError, PluginConfigError, PluginDependencyError,
+    PluginError, PluginLifecycleError, PluginLoadError, PluginRuntimeError,
+    short_reason,
 )
+
+
+def provided_version(instance) -> str:
+    """插件对外声明的版本（依赖版本要求按它比对）。
+
+    取 `provides_version` 声明的版本，没声明就用 `version` —— 插件名与版本号
+    本来就是同一个实例上的两个字段，不需要再引一层「提供者注册表」。
+    """
+    declared = str(getattr(instance, "provides_version", "") or "").strip()
+    return declared or str(getattr(instance, "version", "") or "").strip()
+
+
+class _DisabledProxy:
+    """包一层「被显式禁用」的插件实例：`enabled` 恒为 False。
+
+    `check_dependencies` 只看 `enabled` 属性，用它就能把「被运维禁用」
+    与「不存在」区分成两条不同的原因（**去启用** / 去安装）—— 两者的
+    处理动作完全不同，文案里必须分开。
+    """
+
+    def __init__(self, plugin):
+        self._plugin = plugin
+
+    def __getattr__(self, item):
+        return getattr(self._plugin, item)
+
+    @property
+    def enabled(self) -> bool:
+        return False
+
+
+class _DepsProxy:
+    """`self.deps` —— 按名字取**依赖插件实例**的只读代理。
+
+    ```python
+    store = self.deps.get("store")      # 必需依赖（加载期已保证在）
+    if self.deps.has("ai_chat"):        # 可选依赖（不在也不该炸）
+        ...
+    ```
+
+    取不到时 `get()` 返回 None（不抛）：可选依赖本来就允许缺席，
+    而必需依赖在**加载期**就已经校验过，真到运行时还没有属于框架 bug，
+    不该让插件作者的调用点到处写 try/except。
+    """
+
+    def __init__(self, plugin: "PluginBase"):
+        self._plugin = plugin
+
+    def _manager(self):
+        own = getattr(self._plugin, "_manager", None)
+        if own is not None:
+            return own
+        return getattr(getattr(self._plugin, "client", None), "plugins", None)
+
+    def get(self, name: str):
+        manager = self._manager()
+        return manager.get(name) if manager is not None else None
+
+    def has(self, name: str) -> bool:
+        """依赖是否**已加载**（不区分是否启用 —— 用 `enabled(name)` 看启用）。"""
+        return self.get(name) is not None
+
+    def enabled(self, name: str) -> bool:
+        instance = self.get(name)
+        return bool(instance is not None and getattr(instance, "enabled", False))
+
+    def require(self, name: str) -> "PluginBase":
+        """取必需依赖，取不到直接抛（**运行期**兜底，正常情况下走不到）。"""
+        instance = self.get(name)
+        if instance is None:
+            raise PluginDependencyError(
+                f"依赖插件 {name} 没有加载（它是否被禁用/卸载了？）",
+                plugin=self._plugin.name, missing=[name])
+        return instance
+
+    def names(self) -> list[str]:
+        """本插件声明的全部依赖名（必需 + 可选）。"""
+        required, optional = dependency_names(self._plugin)
+        return required + optional
+
+    def __contains__(self, name: str) -> bool:
+        return self.has(name)
+
+    def __bool__(self) -> bool:
+        return True
 
 
 class PluginBase(ABC):
@@ -58,6 +149,15 @@ class PluginBase(ABC):
     version: str = "0.1.0"
     description: str = ""
     author: str = ""
+
+    #: 必需依赖（插件名列表）：**没装/没启用就不加载本插件**，原因私聊超管。
+    #: 支持版本要求：`requires = ["store", "ai_chat>=1.2"]`。
+    requires: list[str] = []
+    #: 可选依赖：有就用、没有照常加载（`self.deps.get("名字")` 拿到 None）。
+    #: 写在这里的价值是「装/卸时能提示」，以及在都装的情况下保证加载顺序。
+    optional_requires: list[str] = []
+    #: 对外声明的版本（默认同 `version`）—— 依赖方写的 `名字>=1.2` 按它比对。
+    provides_version: str = ""
 
     def __init__(self, api: ApiClient, event_bus: EventBus, timer: TimerManager,
                  cmd_manager: CommandManager, perm_manager: PermissionManager,
@@ -91,6 +191,10 @@ class PluginBase(ABC):
         #: 构造期配置初始化的结果 / 失败原因（框架加载后据此告警超管）。
         self.config_seed: ConfigFill = ConfigFill([], [])
         self.config_seed_error: Optional[BaseException] = None
+        #: 依赖访问代理（`self.deps.get("store")`）；见 `_DepsProxy`。
+        self.deps = _DepsProxy(self)
+        #: 加载自己的 PluginManager（框架实例化时注入；独立构造时为 None）。
+        self._manager = None
         # 配置初始化放在**构造期**：这样「所有插件首次运行就把全部配置项写进
         # config.json」对任何构造路径都成立 —— 框架加载、测试直接 new、脚本里
         # 手动构造都一样，不依赖调用方记得补这一步。
@@ -105,6 +209,49 @@ class PluginBase(ABC):
     async def on_enable(self):
         """插件被启用时调用"""
         pass
+
+    # ---- 依赖 ----
+
+    @classmethod
+    def dependency_specs(cls) -> tuple[list[RequirementSpec], list[RequirementSpec]]:
+        """本插件声明的依赖 (必需, 可选)。
+
+        ⚠️ 这是**类方法**：框架在实例化之前就要读它 —— 依赖不满足时压根不该
+        构造插件（否则 `config_template()` 已经写盘、`on_load` 已经跑了一半）。
+        声明写坏（名字非法、依赖自己、必需/可选重复）会抛 `DependencyError`。
+        """
+        return validate_declaration(cls.name or cls.__name__,
+                                    getattr(cls, "requires", None),
+                                    getattr(cls, "optional_requires", None))
+
+    @classmethod
+    def dependency_names(cls) -> tuple[list[str], list[str]]:
+        """(必需依赖名, 可选依赖名) —— 只要名字，排序/建图用。"""
+        required, optional = cls.dependency_specs()
+        return [s.name for s in required], [s.name for s in optional]
+
+    def dependency_check(self):
+        """当前依赖是否满足（`DependencyCheck`：missing/disabled/version_mismatch…）。
+
+        加载期框架用它决定「能不能加载」；插件运行期也可以用它自查
+        （例如可选依赖突然被禁用时降级）。依赖是**按名字**去框架查的，
+        不要求依赖先加载 —— 因此可用在 `on_load` 里。
+        """
+        required, optional = self.dependency_specs()
+        manager = getattr(self, "_manager", None) or getattr(
+            getattr(self, "client", None), "plugins", None)
+        return check_dependencies(
+            required, optional,
+            resolve=(manager.get if manager is not None else (lambda _name: None)),
+            version_of=provided_version, owner=self.name)
+
+    def _dep_names(self) -> tuple[list[str], list[str]]:
+        """内部用：声明写坏时不抛异常，退化成「没有依赖」并在日志里说清。"""
+        try:
+            return self.dependency_names()
+        except DependencyError as exc:
+            self._log("error", f"依赖声明非法：{exc}")
+            return [], []
 
     def _seed_config(self) -> ConfigFill:
         """按 `config_template()` 初始化 `config.json` 里本插件的配置段。
@@ -405,30 +552,227 @@ class PluginManager:
         self._plugins: dict[str, PluginBase] = {}
         self._watcher_task: Optional[asyncio.Task] = None
         self._file_mtimes: dict[str, float] = {}
+        #: 被**显式禁用**过的插件名（运维/命令禁用）。与「还没启用」区分开：
+        #: 加载期依赖检查只看这个集合 —— 否则 `load_all()` 里
+        #: 「A 已加载但尚未启用」会让依赖 A 的 B 永远加载不了（鸡生蛋）。
+        self._disabled: set[str] = set()
+        #: 因依赖不满足而**没加载**的插件：{名字: 原因}。`/plugins` 与 watcher 用
+        #: 它解释「文件明明在、为什么没加载」，而不是让人去猜。
+        self._dep_blocked: dict[str, str] = {}
+        #: 依赖图缓存（每次插件集合变化时失效）：拓扑序与反向边都由它算。
+        self._dep_cache: Optional[tuple[tuple, dict, dict]] = None
+        #: `reload()` 级联保护的开关（避免「重载依赖 → 级联重载使用者」时递归）。
+        self._reloading: set[str] = set()
         # 生命周期失败（加载/启用/重载）的受众是超管而不是群：群里只该看到
         # 「出错了 + 编号」，内部故障细节走超管私聊与日志。
         self._errors = error_reporter or ErrorReporter()
         self._errors.set_plugin_resolver(self.plugin_of_handler)
 
+    # ---- 依赖图 ----
+
+    def _deps_of(self, name: str) -> tuple[list[str], list[str]]:
+        """某插件声明的 (必需依赖名, 可选依赖名)。
+
+        - 已加载的插件：读实例属性（**包含**插件在 `on_load` 里动态改过的声明）；
+        - 尚未加载的插件：读**类属性**（先把模块导入一次、拿到 PluginBase 子类）——
+          加载顺序必须在加载之前就能算出来，所以不能只依赖实例。
+        - 类都拿不到（导入失败/没有子类）时返回空：那种插件的失败由 `load()`
+          自己报，不该让排序一起炸。
+        """
+        plugin = self._plugins.get(name)
+        if plugin is not None:
+            try:
+                return plugin.dependency_names()
+            except DependencyError:
+                return [], []
+        plugin_class = self._peek_plugin_class(name)
+        if plugin_class is None:
+            return [], []
+        try:
+            return plugin_class.dependency_names()
+        except DependencyError:
+            return [], []
+
+    def _peek_plugin_class(self, name: str):
+        """不实例化地看一眼插件模块里的 PluginBase 子类（找不到返回 None）。
+
+        加载顺序必须在**加载之前**算出来，而 `requires` / `optional_requires`
+        是类属性 —— 所以这里只能先把模块导入一次。副作用已经清干净：
+
+        - 不调用任何生命周期钩子，不注册命令/事件/定时器；
+        - 导入期间挂进 `sys.modules` 的名字（含 `__init__.py` 里
+          `from .main import X` 拉起来的子模块）**结束后全部摘掉**，
+          正式 `load()` 会重新导入，不会拿到这里的半成品。
+
+        ⚠️ 包目录的 `__init__.py` 用相对导入（`from .main import X`）时必须
+        先把父模块挂进 `sys.modules`，否则导入直接失败 → 拿不到声明 →
+        依赖检查被静默跳过（踩过：`requires` 形同虚设）。
+        """
+        pkg_init = self.plugin_dir / name / "__init__.py"
+        file_path = pkg_init if pkg_init.exists() else self.plugin_dir / f"{name}.py"
+        if not file_path.exists():
+            return None
+        mod_name = f"napcat_plugin_{name}"
+        saved = {key: sys.modules[key] for key in list(sys.modules)
+                 if key == mod_name or key.startswith(mod_name + ".")}
+        try:
+            spec = importlib.util.spec_from_file_location(mod_name, str(file_path))
+            if spec is None or spec.loader is None:
+                return None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[mod_name] = module
+            spec.loader.exec_module(module)
+        except Exception:  # noqa: BLE001 - 语法错误/缺依赖都在 load() 里正式报
+            return None
+        finally:
+            added = [key for key in list(sys.modules)
+                     if key == mod_name or key.startswith(mod_name + ".")]
+            for key in added:
+                sys.modules.pop(key, None)
+            sys.modules.update(saved)      # 本来就在的（热重载中间态）原样放回
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if (inspect.isclass(attr) and issubclass(attr, PluginBase)
+                    and attr is not PluginBase):
+                return attr
+        return None
+
+    def _invalidate_deps(self, changed: Optional[str] = None) -> None:
+        """插件集合变了 → 依赖图作废；`changed` 相关插件的阻塞记录也作废。
+
+        ⚠️ **不能整张 `_dep_blocked` 一起清**：它是「上次为什么被挡下」的判定
+        缓存，也是把原因呈现给运维（`/plugins`、`blocked_reason`）的唯一来源。
+        整张清掉的后果：随便哪个插件加载成功，其它「因缺依赖/声明写坏」被挡下的
+        插件就从视图里消失，运维再也看不到原因（测试逼出来的）。
+
+        这里只清**与本次变化相关**的名字：刚加载/卸载的那个插件，以及依赖它的
+        插件（`_edges()` 用的还是旧图，正好覆盖「依赖刚装好」的场景）。
+        于是「依赖装上 → 被挡下的插件下次 load 重新判定并放行」成立，
+        而无关插件的诊断信息保留。
+        """
+        names: set[str] = set()
+        if changed is not None:
+            names.add(changed)
+            try:
+                requires_edges, optional_edges = self._edges()
+                names |= set(requires_edges.get(changed, ()))
+                names |= set(optional_edges.get(changed, ()))
+            except Exception:  # noqa: BLE001 - 图算不出来就只清自己那条
+                pass
+        self._dep_cache = None
+        for name in names or list(self._dep_blocked):
+            self._dep_blocked.pop(name, None)
+
+    def _edges(self) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+        """缓存依赖图的 (requires 边, optional 边)；键是依赖、值是使用者。"""
+        names = sorted(self._plugin_names())
+        key = tuple(names)
+        if self._dep_cache is not None and self._dep_cache[0] == key:
+            return self._dep_cache[1], self._dep_cache[2]
+        requires_edges, optional_edges = graph(names, self._deps_of)
+        self._dep_cache = (key, requires_edges, optional_edges)
+        return requires_edges, optional_edges
+
+    def load_order(self) -> list[str]:
+        """目录里全部插件的加载顺序：**依赖在前**（必需与可选依赖都参与排序）。
+
+        只依赖必需依赖的边做环检测；可选依赖成环不会让谁加载不了。
+        声明成环时抛 `DependencyError` —— 由调用方决定是报错还是退化。
+        """
+        names = sorted(self._plugin_names())
+        return dep_load_order(names, self._deps_of)
+
+    def unload_order(self) -> list[str]:
+        """卸载顺序：使用者在前、被依赖的在后（`shutdown()` 用）。"""
+        names = sorted(self._plugin_names())
+        return dep_unload_order(names, self._deps_of)
+
+    def dependents(self, name: str) -> list[str]:
+        """哪些**已加载**的插件依赖 `name`（必需 + 可选，去重、排序）。"""
+        requires_edges, optional_edges = self._edges()
+        users = set(requires_edges.get(name, ())) | set(optional_edges.get(name, ()))
+        return sorted(user for user in users if user in self._plugins)
+
+    def dependencies(self, name: str, *, optional: bool = True) -> list[str]:
+        """`name` 声明的依赖名（可选 `optional=False` 只看必需依赖）。"""
+        required, optionals = self._deps_of(name)
+        return sorted(set(required + (optionals if optional else [])))
+
+    def dependency_target(self, name: str):
+        """依赖检查的解析器：返回「可用」的依赖实例，不可用返回 None。
+
+        判定只看两件事：**加载了没有**、**有没有被显式禁用**。
+        ⚠️ 不看 `_enabled`：「尚未启用」在 `load_all() → enable_all()` 之间是
+        每个插件的正常状态，拿它当不满足会让依赖别人先加载的插件永远进不来。
+        真正「必须有启用的依赖」的时机是 `enable()`（它先启用依赖再启用自己）。
+        """
+        plugin = self._plugins.get(name)
+        if plugin is None:
+            return None
+        if name in self._disabled:
+            return _DisabledProxy(plugin)
+        return plugin
+
+    def blocked_reason(self, name: str) -> str:
+        """这个插件是不是因为依赖不满足才没加载（是则返回原因，否则空串）。"""
+        return self._dep_blocked.get(name, "")
+
+    def dependency_verdict(self, name: str):
+        """**现在**这个插件的必需依赖满足没有（`DependencyCheck`）。
+
+        与 `blocked_reason()` 的区别：那个是「上次加载时为什么被挡下」的缓存，
+        这个是实时的（依赖可能刚装上）。诊断类入口（`/plugins`）用这个，
+        watcher 用缓存即可（它只关心「要不要现在重试」）。
+        """
+        from .deps import check_dependencies as _check
+
+        plugin_class = self._plugins[name].__class__ if name in self._plugins \
+            else self._peek_plugin_class(name)
+        if plugin_class is None:
+            return None                      # 模块本身读不了 → 没有判定可言
+        try:
+            required, optional = plugin_class.dependency_specs()
+        except DependencyError:
+            return None                      # 声明写坏了 → 由加载期报错路径说明
+        return _check(required, optional, resolve=self.dependency_target,
+                      version_of=provided_version, owner=name,
+                      check_enabled=False)
+
     async def load_all(self):
-        """加载插件目录下的所有插件（支持 .py 文件和包目录）"""
+        """加载插件目录下的所有插件（支持 .py 文件和包目录）。
+
+        **按依赖顺序加载**：`store` 必须先于用到它的插件进 `_plugins`，
+        否则依赖检查永远说「缺少 store」。顺序由 `load_order()` 算
+        （拓扑排序，同层按字典序）；依赖声明成环时退化成字典序并报给超管。
+        """
         if not self.plugin_dir.exists():
             self.plugin_dir.mkdir(parents=True, exist_ok=True)
             return
 
-        for path in sorted(self.plugin_dir.iterdir()):
-            if path.name.startswith("_"):
-                continue
-            # 包目录: name/__init__.py
-            if path.is_dir() and (path / "__init__.py").exists():
-                await self.load(path.name)
-            # 单文件: name.py
-            elif path.suffix == ".py":
-                await self.load(path.stem)
+        try:
+            order = self.load_order()
+        except DependencyError as exc:
+            self.logger.error(f"插件依赖声明有问题，按字典序加载：{exc}")
+            await self._report_lifecycle(exc, "（依赖图）", "依赖解析")
+            order = sorted(self._plugin_names())
+        for name in order:
+            await self.load(name)
 
     async def enable_all(self):
-        for name in list(self._plugins.keys()):
+        """启用全部已加载插件（按依赖顺序：依赖先启用）。"""
+        for name in self._ordered(list(self._plugins.keys())):
             await self.enable(name)
+
+    def _ordered(self, names: list[str]) -> list[str]:
+        """把一批插件名按依赖顺序排（成环等异常时退回字典序）。"""
+        if not names:
+            return []
+        try:
+            order = self.load_order()
+        except DependencyError:
+            return sorted(names)
+        index = {name: i for i, name in enumerate(order)}
+        return sorted(names, key=lambda n: (index.get(n, len(order)), n))
 
     def plugin_of_handler(self, handler) -> str:
         """这个事件处理器属于哪个插件（按函数对象精确匹配，不做名字前缀猜测）。
@@ -459,8 +803,67 @@ class PluginManager:
 
     # ---- 加载 ----
 
+    async def _check_requires_before_load(self, name: str) -> bool:
+        """加载前的依赖闸门：True = 可以继续加载，False = 已挡下（跳过构造）。
+
+        挡下的两种情况：依赖不满足（记 `_dep_blocked` + 私聊超管）、
+        依赖声明本身写坏了（同上）。两种都**不抛异常** —— 一个插件的声明写错
+        不该让 `load_all()` 半路炸掉，其它插件还得照常起来。
+
+        ⚠️ 返回值必须是 `bool`：这个函数早先返回「实例或 None」并且**两种情况
+        都返回 None**，等于闸门从未生效（`load()` 把 None 当成「继续」）——
+        「依赖不满足的插件照样加载」这种 bug 靠读代码很难发现，测试才逼出来。
+        """
+        from .deps import check_dependencies as _check
+
+        plugin_class = self._peek_plugin_class(name)
+        if plugin_class is None:
+            return True                      # 模块本身有问题 → 走正常失败路径
+        try:
+            required, optional = plugin_class.dependency_specs()
+        except DependencyError as exc:
+            self.logger.error(f"插件 {name} 的依赖声明非法：{exc}")
+            self._dep_blocked[name] = f"依赖声明非法：{exc}"
+            await self._report_lifecycle(
+                PluginDependencyError(f"依赖声明非法：{exc}", plugin=name,
+                                      cause=exc), name, "依赖检查")
+            return False
+        if not required and not optional:
+            return True
+        # 必需依赖必须「已加载、且没被显式禁用」。**这里不要求它已启用** ——
+        # 启用依赖是 `enable()` 的职责（它会把依赖链一路启用起来），
+        # 而 `load_all()` 阶段大家都还没启用：要求已启用就成了鸡生蛋，
+        # 表现是「依赖后加载的插件永远进不来」。
+        verdict = _check(required, [],
+                         resolve=self.dependency_target,
+                         version_of=provided_version, owner=name,
+                         check_enabled=False)     # 加载期只要求「在且没被禁用」
+        if verdict.ok:
+            return True
+        reason = verdict.reason()
+        first_time = self._dep_blocked.get(name) != reason
+        self._dep_blocked[name] = reason
+        if not first_time:
+            # watcher 每 2 秒重试一次，同一个原因只报一次超管（日志也不重复刷）
+            return False
+        self.logger.warning(f"插件 {name} 暂不加载：{reason}")
+        hint = verdict.hint()
+        await self._report_lifecycle(
+            PluginDependencyError(
+                reason + (f"（{hint}）" if hint else ""),
+                plugin=name, missing=[s.name for s in
+                                      verdict.missing + verdict.disabled]),
+            name, "依赖检查")
+        return False
+
     async def load(self, name: str) -> Optional[PluginBase]:
-        """加载单个插件（支持 .py 文件或包目录）"""
+        """加载单个插件（支持 .py 文件或包目录）。
+
+        **依赖是加载的前置条件**：声明的必需依赖没装或没启用时**不构造插件**，
+        原因记进 `_dep_blocked` 并私聊超管。不构造是有意的 —— 一旦构造，
+        `config_template()` 就已经写盘、`on_load` 也跑了一半，留一个
+        「加载了但用不了」的实例比干脆不加载难查得多。
+        """
         if name in self._plugins:
             self.logger.warning(f"插件 {name} 已加载")
             return self._plugins[name]
@@ -476,6 +879,10 @@ class PluginManager:
                 self.logger.error(f"插件不存在: {self.plugin_dir / name}")
                 return None
             mod_name = f"napcat_plugin_{name}"
+
+        # 依赖检查放在实例化**之前**（读类属性，见 PluginBase.dependency_specs）
+        if not await self._check_requires_before_load(name):
+            return None
 
         plugin_instance = None
         try:
@@ -503,6 +910,10 @@ class PluginManager:
                     )
                     if not instance.name:
                         instance.name = name
+                    # 管理器引用：`self.deps` / 依赖自查用它拿「谁依赖谁」，
+                    # 比绕 `self.client.plugins` 可靠（客户端可能还没就绪、
+                    # 或是脚本/测试里手搓的宿主对象）。
+                    instance._manager = self
                     plugin_instance = instance
                     break
 
@@ -519,6 +930,8 @@ class PluginManager:
             await plugin_instance.on_load()
             plugin_instance._loaded = True
             self._plugins[name] = plugin_instance
+            self._dep_blocked.pop(name, None)
+            self._invalidate_deps(name)
             self._file_mtimes[name] = max(
                 (p.stat().st_mtime for p in self._plugin_files(name)), default=0.0)
             self.logger.info(f"插件 {name} v{plugin_instance.version} 加载成功")
@@ -554,6 +967,7 @@ class PluginManager:
         if instance is not None:
             instance._off_own_handlers()
             instance._off_own_timers()
+        self._invalidate_deps(name)
 
     async def _report_config_seed(self, name: str, plugin: "PluginBase") -> None:
         """配置初始化**已经**在构造期做完（见 `PluginBase._seed_config`）。
@@ -584,11 +998,29 @@ class PluginManager:
     # ---- 启用/禁用 ----
 
     async def enable(self, name: str) -> bool:
+        """启用插件。**先启用它的必需依赖**（递归，环由加载期挡掉）。
+
+        依赖没加载时直接返回 False：那种插件本来就不该被加载（`load()` 的
+        依赖闸门会拦住），走到这里说明有人手工 `unload` 了依赖。
+        """
         plugin = self._plugins.get(name)
         if not plugin:
             return False
         if plugin._enabled:
             return True
+        ok, auto = await self.ensure_requires(name)
+        if auto:
+            self.logger.info(f"为启用 {name}，先启用了依赖：{'、'.join(auto)}")
+        if not ok:
+            blocked = [d for d in self.dependencies(name)
+                       if d not in self._plugins or d in self._disabled]
+            detail = f"（{'、'.join(blocked)}）" if blocked else ""
+            self.logger.warning(
+                f"插件 {name} 的依赖未就绪{detail}，跳过启用"
+                + ("；被显式禁用的依赖需要先自己启用（/plugins 看状态）"
+                   if any(d in self._disabled for d in blocked) else ""))
+            return False
+        self._disabled.discard(name)
         try:
             await plugin.on_enable()
             plugin._enabled = True
@@ -613,12 +1045,120 @@ class PluginManager:
             await self._report_lifecycle(exc, name, "启用")
             return False
 
-    async def disable(self, name: str) -> bool:
+    async def ensure_requires(self, name: str) -> tuple[bool, list[str]]:
+        """确保 `name` 的必需依赖都已**加载并启用**，返回 (是否就绪, 被顺带启用的)。
+
+        递归：依赖自己还有依赖时会一路往上启用（环在加载期就报错了，
+        这里再带一个 `seen` 集合兜底，防止声明被运行期篡改后死循环）。
+        """
+        auto: list[str] = []
+        seen: set[str] = set()
+
+        async def ensure(target: str) -> bool:
+            if target in seen:
+                return True                    # 环兜底：已经处理过就不再往下钻
+            seen.add(target)
+            plugin = self._plugins.get(target)
+            if plugin is None:
+                return False                   # 没加载 → 依赖不满足
+            try:
+                required, _optional = plugin.dependency_names()
+            except DependencyError:
+                required = []
+            for dep in required:
+                if not await ensure(dep):
+                    return False               # 依赖的依赖不满足 → 整条链不满足
+            if plugin._enabled:
+                return True
+            if await self._enable_direct(target):
+                auto.append(target)
+                return True
+            return False                       # 启用失败（已报超管）
+
+        plugin = self._plugins.get(name)
+        if plugin is None:
+            return False, []
+        try:
+            required, _optional = plugin.dependency_names()
+        except DependencyError:
+            required = []
+        ready = True
+        for dep in required:
+            if not await ensure(dep):
+                ready = False
+        return ready, auto
+
+    async def _enable_direct(self, name: str) -> bool:
+        """只跑 `on_enable`（依赖已由 `ensure_requires` 处理过，避免重复递归）。
+
+        **被显式禁用的插件不会被顺带启用**：`disable()` 是运维/命令的明确决定，
+        不该因为另一个插件要启动就被悄悄推翻。这种「依赖被禁用」的情况会如实
+        返回 False，由调用方说明原因（`/plugins` 里能看到它是 ✗）。
+        """
+        plugin = self._plugins.get(name)
+        if plugin is None:
+            return False
+        if plugin._enabled:
+            return True
+        if name in self._disabled:
+            self.logger.warning(f"插件 {name} 已被显式禁用，不自动启用它")
+            return False
+        self._disabled.discard(name)
+        try:
+            await plugin.on_enable()
+            plugin._enabled = True
+            plugin._handlers_base = len(plugin._handlers)
+            self.logger.info(f"插件 {name} 已启用")
+            return True
+        except Exception as exc:
+            self.logger.error(f"启用插件 {name} 失败:\n{traceback.format_exc()}")
+            plugin._off_own_handlers()
+            plugin._off_own_timers()
+            try:
+                self.cmd_manager.unregister_plugin(name)
+            except Exception:  # noqa: BLE001
+                self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
+            plugin._enabled = False
+            plugin._handlers_base = 0
+            await self._report_lifecycle(exc, name, "启用")
+            return False
+
+    async def dependents_block(self, name: str, *, action: str,
+                               what: str = "") -> list[str]:
+        """`name` 被别的**已启用**插件依赖时，记一条日志并返回这些使用者的名字。
+
+        返回空列表 = 可以继续。调用方据此决定「拒绝」还是「级联」。
+        """
+        users = [u for u in self.dependents(name)
+                 if self._plugins.get(u) is not None
+                 and getattr(self._plugins[u], "_enabled", False)]
+        if not users:
+            return []
+        subject = what or name
+        self.logger.warning(
+            f"插件 {name} 不能{action}：{ '、'.join(users) } 正在依赖它")
+        return users
+
+    async def disable(self, name: str, *, force: bool = False) -> bool:
+        """禁用插件。
+
+        **默认不拆别人的台**：还有已启用的插件依赖它时拒绝（`force=True` 才级联
+        禁用那些使用者，顺序是「使用者在前」）。理由很实在 —— 把 store 停掉之后
+        用它的插件还在收事件、调 `self.deps.get("store")` 拿到 None，
+        表现是「某个功能莫名不响应」，比直接拒绝难查得多。
+        """
         plugin = self._plugins.get(name)
         if not plugin:
             return False
         if not plugin._enabled:
             return True
+        users = await self.dependents_block(name, action="禁用")
+        if users and not force:
+            return False
+        if users:
+            for user in await self._ordered_for_unload(users):
+                await self.disable(user, force=True)
+        self._disabled.add(name)
         try:
             await plugin.on_disable()
             plugin._handlers_base = len(plugin._handlers)
@@ -631,6 +1171,17 @@ class PluginManager:
             return False
 
     # ---- 卸载 ----
+
+    async def _ordered_for_unload(self, names: list[str]) -> list[str]:
+        """把一批插件按「使用者在前、被依赖的在后」排序（卸载顺序）。"""
+        if not names:
+            return []
+        try:
+            order = self.unload_order()
+        except DependencyError:
+            return sorted(names)
+        index = {name: i for i, name in enumerate(order)}
+        return sorted(names, key=lambda n: (index.get(n, len(order)), n))
 
     def _purge_modules(self, name: str) -> int:
         """把该插件的整棵模块子树从 `sys.modules` 摘掉，返回摘掉的条数。
@@ -649,10 +1200,28 @@ class PluginManager:
             removed += 1
         return removed
 
-    async def unload(self, name: str) -> bool:
+    async def unload(self, name: str, *, force: bool = False) -> bool:
+        """卸载插件。
+
+        **默认不拆别人的台**：还有已启用插件依赖它时拒绝；`force=True` 先按
+        「使用者在前」的顺序卸载那些使用者，再卸载它自己。
+        `shutdown()` 用 force 走这条路。
+        """
+        plugin = self._plugins.get(name)
+        if not plugin:
+            return False
+        users = await self.dependents_block(name, action="卸载")
+        if users and not force:
+            return False
+        for user in await self._ordered_for_unload(users):
+            await self.unload(user, force=True)
         plugin = self._plugins.pop(name, None)
         if not plugin:
             return False
+        self._dep_blocked.pop(name, None)
+        self._disabled.discard(name)
+        # 卸载后「依赖它的插件」需要重新判定（依赖没了 → 该被挡下）
+        self._invalidate_deps(name)
         try:
             if plugin._enabled:
                 await plugin.on_disable()
@@ -694,14 +1263,23 @@ class PluginManager:
         此前 reload 先把插件从 `_plugins` 摘掉再加载，一旦新代码导入失败（语法错误、
         依赖缺失、ImportError…）插件就**永久消失**：watcher 只遍历 `_plugins`，
         再也不会碰它，旧版本也已经被打死 —— 只能重启服务。
+
+        **依赖级联**：重载 `store` 之后，那些 `self.deps.get("store")` 里握着旧实例
+        的插件必须一起重载（否则它们看到的是被 `_off_own_handlers` 解绑过的死对象）。
+        级联集合在卸载**之前**快照（依赖关系可能随新代码变化），并且只在目标重载
+        成功时才级联 —— 目标回滚到旧版本时，使用者本来就是对的。
         """
         self.logger.info(f"热重载插件: {name}")
         previous = self._plugins.get(name)
         was_enabled = bool(previous and previous._enabled)
+        # 快照：谁依赖了它（用**旧**代码的声明，因为新代码还没加载）
+        cascade = [u for u in self.dependents(name) if u != name]
+        cascade_enabled = {u for u in cascade
+                           if getattr(self._plugins.get(u), "_enabled", False)}
 
         if was_enabled:
-            await self.disable(name)
-        await self.unload(name)
+            await self.disable(name, force=True)
+        await self.unload(name, force=True)
         # 清理整棵模块子树：包目录插件的子模块（.main/.portal/...）此前残留
         # 在 sys.modules 中，导致热重载后仍执行旧代码。
         self._purge_modules(name)
@@ -712,12 +1290,24 @@ class PluginManager:
 
         plugin = await self.load(name)
         if plugin is not None:
+            ok = True
             if was_enabled:
                 # 加载成功 ≠ 能用：`on_enable` 失败时插件是「已加载但没启用」，
                 # 这时报「重载成功」会让 `/reload` 与 watcher 都以为没事了
                 # （watcher 会刷新 mtime，于是这份代码再也不会被重试）。
-                return await self.enable(name)
-            return True
+                ok = await self.enable(name)
+            if cascade:
+                await self._reload_dependents(cascade, was_enabled=cascade_enabled)
+            return ok
+
+        # 依赖不满足 → **不回滚**：旧实例活着也服务不了（它的依赖不在/被禁用），
+        # 留着只会让 `/plugins` 显示一个「加载了但永远起不来」的僵尸。
+        # 与「新代码导入失败」区分开：那种回滚是有意义的（旧代码还能干活）。
+        if self._dep_blocked.get(name):
+            self.logger.warning(
+                f"插件 {name} 因依赖未满足不加载：{self._dep_blocked[name]}"
+                f"（依赖就绪后会自动加载）")
+            return False
 
         # 新版本加载失败 → 回滚到原来那份实例（代码还留在内存里，仍可服务）
         if previous is not None:
@@ -736,6 +1326,11 @@ class PluginManager:
                 self.logger.warning(
                     f"插件 {name} 新版本加载失败，已回滚到修改前的版本"
                     f"（修正后保存文件会自动重试）")
+                # 级联前被禁用的使用者：依赖已经回到旧实例，把它们恢复回去
+                for user in self._ordered(cascade):
+                    if user in cascade_enabled and not getattr(
+                            self._plugins.get(user), "_enabled", False):
+                        await self.enable(user)
             except Exception as exc:
                 self.logger.error(
                     f"插件 {name} 回滚旧版本也失败:\n{traceback.format_exc()}")
@@ -766,8 +1361,24 @@ class PluginManager:
                     except OSError:
                         pass
 
+    async def _reload_dependents(self, names: list[str], *,
+                                 was_enabled: set[str]) -> None:
+        """重载一批「依赖了刚被重载的插件」的使用者（依赖在前，逐个来）。"""
+        self.logger.info(f"依赖变更，级联重载：{'、'.join(names)}")
+        for user in self._ordered(names):
+            if user not in self._plugins:
+                continue
+            was_on = user in was_enabled
+            ok = await self.reload(user)
+            if was_on and not ok:
+                self.logger.error(
+                    f"级联重载 {user} 失败：它依赖的插件刚更新过，"
+                    f"请修正后 /reload {user}")
+            elif was_on and not getattr(self._plugins.get(user), "_enabled", False):
+                await self.enable(user)
+
     async def reload_all(self):
-        for name in list(self._plugins.keys()):
+        for name in self._ordered(list(self._plugins.keys())):
             await self.reload(name)
 
     # ---- 文件监控热重载 ----
@@ -802,7 +1413,14 @@ class PluginManager:
             await asyncio.sleep(interval)
             # 遍历目录里的**全部**插件，而不是只遍历 self._plugins：
             # 加载失败（或回滚失败）的插件不在里面，但文件修好后应该能被自动拉起。
-            for name in self._plugin_names():
+            # 顺序取依赖拓扑序：**依赖先试** —— 否则依赖后加载的插件这一轮必然
+            # 报「缺少依赖」，要等下一轮（2 秒后）才成功。
+            try:
+                names = self.load_order()
+            except DependencyError as exc:
+                self.logger.warning(f"依赖声明有问题，watcher 用字典序：{exc}")
+                names = self._plugin_names()
+            for name in names:
                 files = self._plugin_files(name)
                 if not files:
                     continue
@@ -814,7 +1432,11 @@ class PluginManager:
                 if known is None:
                     if name in self._plugins:
                         continue        # 已加载但无 mtime 记录（异常路径），不误触发
-                    # 从未成功加载过：试一次，失败就安静等待下次文件变更
+                    # 从未成功加载过：试一次，失败就安静等待下次文件变更。
+                    # 因依赖不满足被挡住的不再刷日志：`load()` 只在**第一次**挡下时
+                    # 报超管（见 `_dep_blocked`），这里保持安静。
+                    if self._dep_blocked.get(name):
+                        continue
                     self.logger.info(f"检测到尚未加载的插件 {name}，尝试加载...")
                     loaded = await self.load(name)
                     if loaded is not None:
@@ -847,10 +1469,16 @@ class PluginManager:
         return self._plugins.get(name)
 
     async def shutdown(self):
-        """关闭所有插件"""
+        """关闭所有插件（**按卸载顺序**：使用者先走，被依赖的后走）。"""
         self.stop_watch()
-        for name in list(self._plugins.keys()):
-            await self.unload(name)
+        try:
+            order = self.unload_order()
+        except DependencyError:
+            order = sorted(self._plugins.keys(), reverse=True)
+        loaded = set(self._plugins)
+        for name in order:
+            if name in loaded:
+                await self.unload(name, force=True)
 
 
 def _default_logger():

@@ -3,8 +3,8 @@ iLink 扫码登录 CLI。
 
     cd /ncqqpy && ./venv-arm/bin/python -m napcat.ilink_login
 
-扫码成功后凭据写到 `plugins/ncqq_watchdog/data/ilink_credentials.json`（权限 600），
-插件的通知器会自动读取。登录只需要做一次；之后如果服务端返回
+扫码成功后凭据写到 `napcat/data/ilink_credentials.json`（权限 600），
+看门狗的通知器会自动读取（可用 `NCQQ_WATCHDOG_DATA_DIR` 改数据目录）。登录只需要做一次；之后如果服务端返回
 `errcode=-14 session timeout`，说明登录态过期，重新跑一次这个命令即可。
 
 二维码是**在终端里现画**的（iLink 返回的 `qrcode_img_content` 是个 H5 页面链接，
