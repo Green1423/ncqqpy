@@ -51,11 +51,12 @@ def split_text(text: str, room: int) -> tuple[str, str]:
     if room >= len(text):
         return text, ""
     cut = text.rfind("\n", 0, room)
-    if cut <= 0:
-        cut = room
-    else:
-        cut += 1                     # 换行符留在前一段
-    return text[:cut], text[cut:]
+    # 只有换行点**足够靠后（≥ 一半）**时才按它切：靠前的换行（典型是 21 字的标题行
+    # + 后面一大段没有换行的正文）按它切会让这条消息只装下标题、剩下 1000 多字预算
+    # 白白浪费 —— 实测 3559 字正文被切成「21 + 1200 + 1200 + …」。
+    if cut >= max(1, room // 2):
+        return text[:cut + 1], text[cut + 1:]      # 换行符留在前一段
+    return text[:room], text[room:]
 
 
 class MessageChain:
@@ -293,6 +294,13 @@ class MessageChain:
                 while text:
                     room = char_budget - cur_chars if char_budget else len(text)
                     if room <= 0:
+                        flush()
+                        continue
+                    if char_budget and cur_chars > 0 and len(text) > room:
+                        # 这一整段放不进当前条的剩余空间，但**能放进新的一条** →
+                        # 先换条再整段放，别为了填满而把它切碎。原文链接就是这么被
+                        # 拦腰截断的（当前条只剩 20 字余量，55 字的链接被劈成两半：
+                        # 上一条以 `https://…/notice/` 结尾，下一条以 `2026/…` 开头）。
                         flush()
                         continue
                     head, text = split_text(text, room)

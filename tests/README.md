@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -16,6 +16,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_plugin_config.py` | 插件配置模板契约（首次运行初始化全部配置项） |
 | `test_plugin_deps.py` | 插件依赖：必需/可选声明、拓扑序、缺依赖不加载、卸载保护 |
 | `test_timer.py` | 定时任务精度（不累积偏差 / 落后跳过 / 每日定时月末 / 暂停恢复） |
+| `test_message.py` | 消息切分（原文链接不被切断 / 预算不浪费 / 媒体配额） |
 
 ## 依赖插件的用例会自动跳过
 
