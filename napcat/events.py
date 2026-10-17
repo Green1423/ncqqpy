@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Optional, Type, TypeVar
 from collections import defaultdict
 
+from datetime import datetime, timedelta
+
 from .models import NapCatEvent
+
+_TIMER_LOG = logging.getLogger("napcat.events")
 
 HandlerT = Callable[..., Coroutine[Any, Any, Any]]
 T = TypeVar("T", bound=NapCatEvent)
@@ -188,6 +193,20 @@ class EventBus:
                               what=what)
 
 
+
+def next_daily_target(now: datetime, hour: int, minute: int) -> datetime:
+    """下一次「每天 hour:minute」的时刻（严格大于 now）。
+
+    ⚠️ 不能写 `target.replace(day=now.day + 1)`：1 月 31 日会变成 `day=32` 直接
+    ValueError（2 月 28/29 日同理），也就是说每月最后一两天定时任务会**整天不跑**。
+    `timedelta(days=1)` 会正确进位到次月 1 日。
+    """
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target
+
+
 class TimerManager:
     """计时事件管理器 — 支持元数据追踪。"""
 
@@ -212,23 +231,47 @@ class TimerManager:
 
     def _register(self, name, desc, ttype, value, func, wrapper):
         self._tasks[name] = asyncio.create_task(wrapper())
+        # ⚠️ 必须把 func 存进元数据：`resume_timer()` 靠它重新套装饰器把任务建回来。
+        # 以前没存 → 任何一次「暂停后恢复」都 KeyError: 'func'（`/pause timers <名>`
+        # 的 resume 分支、插件里的 pause_timer/resume_timer 全中招）。
         self._metas[name] = {"id": name, "description": desc, "type": ttype,
-                             "value": value, "running": True}
+                             "value": value, "running": True, "func": func}
         return func
 
     def every(self, seconds: float, name: str = None, description: str = "") -> Callable:
         def decorator(func):
             task_name = name or func.__name__
+            interval = float(seconds)
+            if interval <= 0:
+                # 0/负数会变成忙等（或者睡 0 秒的紧循环），注册时就报错比运行期烧 CPU 好。
+                raise ValueError(f"定时任务 {task_name} 的间隔必须 > 0（收到 {seconds!r}）")
+
             async def _wrapper():
-                await asyncio.sleep(1)
+                loop = asyncio.get_running_loop()
+                # ⚠️ 按**绝对时刻**排程：`next_at` 只加 interval，任务耗时不计入周期。
+                # 旧写法是「跑完任务再 sleep(seconds)」，于是每轮实际周期 =
+                # 任务耗时 + interval —— 实测 40ms 任务 + 100ms 间隔 → 141ms/轮，
+                # 误差会一直累积（一天能偏出几十分钟）。
+                next_at = loop.time() + 1.0     # 首轮仍延迟 1s（给框架启动留时间）
                 while self._running:
+                    wait = next_at - loop.time()
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    next_at += interval
                     try:
                         result = func()
                         if inspect.isawaitable(result):
                             await result
                     except Exception as exc:  # noqa: BLE001
                         await self._report(exc, task_name, func)
-                    await asyncio.sleep(seconds)
+                    # 落后处理：任务比间隔还久、或进程被挂起过 → **跳过**错过的那些轮次，
+                    # 直接对齐到下一个未来时刻。否则会瞬间补跑一堆（连发消息 / 打满 CPU）。
+                    late = loop.time() - next_at
+                    if late > 0:
+                        skipped = int(late // interval) + 1
+                        next_at += skipped * interval
+                        _TIMER_LOG.info("定时任务 %s 落后 %.0fms，跳过 %d 轮对齐到下一周期",
+                                        task_name, late * 1000, skipped)
             return self._register(task_name, description, "interval", f"{seconds}s", func, _wrapper)
         return decorator
 
@@ -238,12 +281,12 @@ class TimerManager:
             hour, minute = map(int, time_str.split(":"))
             async def _wrapper():
                 while self._running:
-                    now = __import__("datetime").datetime.now()
-                    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-                    if target <= now:
-                        target = target.replace(day=now.day + 1)
+                    now = datetime.now()
+                    target = next_daily_target(now, hour, minute)
                     wait = (target - now).total_seconds()
-                    await asyncio.sleep(max(1, wait))
+                    await asyncio.sleep(max(1.0, wait))
+                    if not self._running:
+                        break
                     try:
                         result = func()
                         if inspect.isawaitable(result):

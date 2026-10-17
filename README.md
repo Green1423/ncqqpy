@@ -69,6 +69,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ./venv/bin/python -B tests/test_plugin_config.py  # 配置模板契约
 ./venv/bin/python -B tests/test_plugin_errors.py  # 错误类型与反馈
 ./venv/bin/python -B tests/test_plugin_deps.py    # 插件依赖（必需 + 可选）
+./venv/bin/python -B tests/test_timer.py          # 定时任务精度（不累积偏差）
 ```
 
 其余套件（命令解析、帮助结构、权限覆盖）见 [`tests/README.md`](tests/README.md)。
@@ -83,6 +84,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_plugin_errors.py` | 覆盖 |
 | `tests/test_plugin_config.py` | 覆盖 |
 | `tests/test_plugin_deps.py` | 覆盖 |
+| `tests/test_timer.py` | 覆盖 |
 
 ## 目录
 
