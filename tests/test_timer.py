@@ -238,6 +238,38 @@ async def test_operator_pause_command():
     await asyncio.sleep(0)
 
 
+
+async def test_same_name_reregister():
+    print("\n[9] 同名重新注册：schedule 里只保留一条（旧任务被取消，不会双跑）")
+    tm = TimerManager()
+    tm.start()
+    n = {"v": 0}
+
+    def make():
+        @tm.every(0.04, name="dup")
+        async def _tick():
+            n["v"] += 1
+        return _tick
+
+    make()
+    await asyncio.sleep(1.0 + 0.1)
+    first = n["v"]
+    check("第一个任务在跑", first >= 1, str(first))
+    make()                                    # 同名再注册一次
+    # 新任务同样有首轮 1s 延迟（框架启动预留），先等过它再统计
+    await asyncio.sleep(1.0 + 0.05)
+    after_register = n["v"]
+    await asyncio.sleep(0.3)
+    delta = n["v"] - after_register
+    check("只保留一条任务（0.3s / 40ms ≈ 7 次，双跑会翻倍）",
+          4 <= delta <= 12, f"{delta} 次")
+    check("元数据里同名只有一项", len([m for m in tm.list_all() if m["id"] == "dup"]) == 1,
+          str(len(tm.list_all())))
+    tm.stop()
+    await asyncio.sleep(0)
+
+
+
 async def main() -> int:
     started = time.time()
     await test_no_drift_with_slow_job()
@@ -248,6 +280,7 @@ async def main() -> int:
     test_daily_target()
     await test_error_does_not_stop_timer()
     await test_operator_pause_command()
+    await test_same_name_reregister()
     print(f"\n{'=' * 50}\n通过 {PASSED} / 失败 {FAILED}（{time.time() - started:.1f}s）")
     return 1 if FAILED else 0
 

@@ -230,6 +230,13 @@ class TimerManager:
                               what=f"跑定时任务 {name} 时")
 
     def _register(self, name, desc, ttype, value, func, wrapper):
+        # 同名只允许一条：schedule 是「按名字索引」的表，重复注册（插件重新排一次、
+        # 或先 schedule 再 pause/resume）如果只是覆盖字典，旧 task 会**继续跑** →
+        # 同一个任务被执行两遍，而且再也取消不掉（句柄已丢）。
+        old_task = self._tasks.get(name)
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
+            _TIMER_LOG.info("定时任务 %s 重新注册，旧任务已取消", name)
         self._tasks[name] = asyncio.create_task(wrapper())
         # ⚠️ 必须把 func 存进元数据：`resume_timer()` 靠它重新套装饰器把任务建回来。
         # 以前没存 → 任何一次「暂停后恢复」都 KeyError: 'func'（`/pause timers <名>`
