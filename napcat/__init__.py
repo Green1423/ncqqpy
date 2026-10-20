@@ -58,6 +58,13 @@ from .errors import (
     ErrorReporter, error_code, short_reason,
 )
 from .file_manager import FileManager
+from .store import (
+    Database, Model, QuerySet, Manager, Field,
+    AutoField, IntegerField, FloatField, BooleanField,
+    CharField, TextField, JSONField, DateTimeField,
+    StoreError, DoesNotExist, MultipleObjectsReturned,
+    IntegrityError as StoreIntegrityError, FieldError, NOT_PROVIDED,
+)
 from .launcher import ServerLauncher, LaunchResult
 from .watchdog import Watchdog
 from .plugin import PluginBase, PluginManager
@@ -103,6 +110,12 @@ __all__ = [
     "PluginAccessError", "PluginLoadError", "PluginLifecycleError",
     "PluginDependencyError",
     "ErrorReporter", "error_code", "short_reason",
+    # Store（sqlite ORM）
+    "Database", "Model", "QuerySet", "Manager", "Field",
+    "AutoField", "IntegerField", "FloatField", "BooleanField",
+    "CharField", "TextField", "JSONField", "DateTimeField",
+    "StoreError", "DoesNotExist", "MultipleObjectsReturned",
+    "StoreIntegrityError", "FieldError", "NOT_PROVIDED",
     # File
     "FileManager",
     # Launcher / Watchdog

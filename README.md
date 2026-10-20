@@ -7,6 +7,8 @@
   帮助系统（`/help` 三级入口）。
 - **插件系统**：`plugins/<名字>/` 放进目录即被加载；`PluginBase` 生命周期
   （`on_load → on_enable → on_disable → on_unload`）、文件变更热重载、加载失败回滚。
+- **插件持久化**：`napcat.store` 是 Django 风格的 sqlite3 ORM（模型/字段/查询集/
+  事务），库文件默认落在 `plugins/<插件>/data/<插件>.db`，卸载时框架自动关闭。
 - **首次运行即初始化配置**：插件声明 `config_template()`，框架把它全部配置项
   （含嵌套段）写进 `config.json`，只补缺、不覆盖、幂等。
 - **插件依赖**：`requires` / `optional_requires` 声明依赖，框架按拓扑序加载、
@@ -71,6 +73,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ./venv/bin/python -B tests/test_plugin_deps.py    # 插件依赖（必需 + 可选）
 ./venv/bin/python -B tests/test_timer.py          # 定时任务精度（不累积偏差）
 ./venv/bin/python -B tests/test_message.py        # 消息切分（原文链接不被切断）
+./venv/bin/python -B tests/test_store.py          # sqlite ORM（数据存取）
 ```
 
 其余套件（命令解析、帮助结构、权限覆盖）见 [`tests/README.md`](tests/README.md)。
@@ -87,6 +90,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_plugin_deps.py` | 覆盖 |
 | `tests/test_timer.py` | 覆盖 |
 | `tests/test_message.py` | 覆盖 |
+| `tests/test_store.py` | 覆盖 |
 
 ## 目录
 

@@ -3,8 +3,11 @@ config.json
 config.json.tmp
 .env
 
-# 运行期数据
+# 运行期数据（含插件自己的 sqlite 库：plugins/<名字>/data/）
 napcat/data/
+plugins/*/data/
+plugins/*/data.*/
+data/
 *.log
 
 # 测试临时目录与配置备份

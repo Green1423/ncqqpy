@@ -162,8 +162,13 @@ class PluginBase(ABC):
     def __init__(self, api: ApiClient, event_bus: EventBus, timer: TimerManager,
                  cmd_manager: CommandManager, perm_manager: PermissionManager,
                  file_manager: FileManager, logger, groups=None, cfg=None,
-                 client=None, error_reporter=None):
+                 client=None, error_reporter=None, plugin_dir=None):
         self.api = api
+        #: 插件自己的目录（包插件是 `plugins/<名字>/`，单文件插件是 `plugins/`）。
+        #: `self.database()` 默认把 sqlite 文件放在它下面的 `data/` 里。
+        self._plugin_dir = Path(plugin_dir) if plugin_dir else None
+        #: 本插件打开的 sqlite 库（`self.database()` 缓存；卸载时统一 close）
+        self._databases: dict[str, object] = {}
         self.event_bus = event_bus
         self.timer = timer
         self.cmds = cmd_manager
@@ -433,6 +438,46 @@ class PluginBase(ABC):
             from .config import PluginConfig
             self._config = PluginConfig(self._cfg_root, f"plugins.{self.name}")
         return self._config
+
+    @property
+    def plugin_dir(self):
+        """插件目录（框架加载时注入；手搓实例时为 None）。"""
+        return self._plugin_dir
+
+    def database(self, name: str = "", *, path=None, ensure=()):
+        """打开（并缓存）本插件的 sqlite 库，返回 `napcat.store.Database`。
+
+        默认路径 `<插件目录>/data/<插件名>.db`；`ensure=[模型, ...]` 会顺手
+        建表/补列并把模型绑定到该库（之后 `模型.objects` 直接可用）。
+        `name` 用来区分同一个插件里的多个库（`data/<name>.db`）。
+
+        卸载/热重载时框架会调用 `_close_databases()`，不需要插件自己关。
+        """
+        from .store import Database, StoreError
+        key = name or "__default__"
+        cached = self._databases.get(key)
+        if cached is not None:
+            return cached
+        if path is None:
+            if self._plugin_dir is None:
+                raise StoreError(
+                    f"插件 {self.name} 没有 plugin_dir（手搓实例？）："
+                    "请显式传 database(path=...)")
+            path = Path(self._plugin_dir) / "data" / (f"{name}.db" if name else f"{self.name}.db")
+        db = Database(path)
+        if ensure:
+            db.register(*ensure)
+        self._databases[key] = db
+        return db
+
+    def _close_databases(self) -> None:
+        """关闭本插件打开的所有库（框架在卸载/重载/加载失败时调用）。"""
+        for key, db in list(self._databases.items()):
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001 - 关不掉不该挡住卸载
+                self.logger.warning("关闭数据库 %s 失败", key, exc_info=True)
+        self._databases.clear()
 
     def config_template(self) -> dict:
         """本插件的**完整配置模板**（键 → 默认值），框架据此初始化 `config.json`。
@@ -907,6 +952,9 @@ class PluginManager:
                         file_manager=self.file_manager, logger=self.logger,
                         groups=self._groups, cfg=self._cfg, client=self._client,
                         error_reporter=self._errors,
+                        # 单文件插件（plugins/foo.py）没有自己的目录 → 用 plugins/
+                        plugin_dir=((self.plugin_dir / name)
+                                    if (self.plugin_dir / name).is_dir() else self.plugin_dir),
                     )
                     if not instance.name:
                         instance.name = name
@@ -967,6 +1015,7 @@ class PluginManager:
         if instance is not None:
             instance._off_own_handlers()
             instance._off_own_timers()
+            instance._close_databases()
         self._invalidate_deps(name)
 
     async def _report_config_seed(self, name: str, plugin: "PluginBase") -> None:
@@ -1239,6 +1288,7 @@ class PluginManager:
             except Exception:  # noqa: BLE001
                 self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
             await plugin.on_unload()
+            plugin._close_databases()
             # 移除整棵模块子树
             self._purge_modules(name)
             # ⚠️ 这里**不能** pop `_file_mtimes`：那是热重载监控的元数据，
