@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -19,6 +19,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_message.py` | 消息切分（原文链接不被切断 / 预算不浪费 / 媒体配额） |
 | `test_store.py` | sqlite ORM（字段/查询/事务/补列/并发/插件集成） |
 | `test_plugin_layout.py` | 插件目录布局（拆分 __init__.py / PLUGIN 声明 / 热重载） |
+| `test_plugin_registry.py` | 声明式注册（注册处只装配 / 逻辑分模块 / 卸载回收） |
 
 ## 依赖插件的用例会自动跳过
 

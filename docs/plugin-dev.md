@@ -53,11 +53,14 @@
 13. [热重载](#十三热重载)
     - [13.1 从 GitHub 装卸插件（`plugin_manager`）](#131-从-github-装卸插件plugin_manager)
 14. [插件包结构](#十四插件包结构)
-    - [14.1 拆出 `__init__.py`（推荐写法）](#141-拆出-__init__py推荐写法)
-    - [14.2 最小四文件模板](#142-最小四文件模板)
-    - [14.3 几条硬性要求](#143-几条硬性要求)
-    - [14.4 什么时候别拆](#144-什么时候别拆)
-    - [14.5 把现有插件迁过去（3 步）](#145-把现有插件迁过去3-步)
+    - [14.1 目录](#141-目录)
+    - [14.2 注册：`plugin.py`（没有逻辑）](#142-注册pluginpy没有逻辑)
+    - [14.3 逻辑：`commands/chat.py`](#143-逻辑commandschatpy)
+    - [14.4 逻辑：`events/` 与 `jobs/`](#144-逻辑events-与-jobs)
+    - [14.5 处理器签名（框架注入什么）](#145-处理器签名框架注入什么)
+    - [14.6 几条硬性要求](#146-几条硬性要求)
+    - [14.7 什么时候别拆](#147-什么时候别拆)
+    - [14.8 把现有插件迁过去（3 步）](#148-把现有插件迁过去3-步)
 15. [配置管理](#十五配置管理)
     - [15.1 config.json](#151-configjson)
     - [15.2 bind / unbind 自动持久化](#152-bind--unbind-自动持久化)
@@ -1050,121 +1053,176 @@ class WelcomePlugin(PluginBase):
 
 ---
 
-## 十四、插件包结构
+## 十四、插件包结构：注册与逻辑分离
 
-### 14.1 拆出 `__init__.py`（推荐写法）
+一条原则：**注册处只写「装哪些」，不写「怎么干」**。`on_enable` 里不定义处理器、
+不写业务分支 —— 它只做 `self.register_module(...)`；每条命令 / 事件 / 定时任务的
+逻辑按**类别**放独立模块（`commands/`、`events/`、`jobs/`）。
 
-插件是**包**时，`__init__.py` 只做入口导出，逻辑全放别的模块：
+### 14.1 目录
 
 ```
 plugins/demo/
-├── __init__.py      # 3 行：docstring + import + PLUGIN
-├── main.py          # 插件类：生命周期、命令/事件注册
-├── schemas.py       # 命令参数（CommandSchema）
-├── store.py         # 数据模型（napcat.store.Model）
-├── handlers.py      # 具体处理逻辑（被 main.py 调用）
-└── data/            # 运行时数据（config / sqlite / 缓存；不进仓库）
+├── __init__.py            # docstring + `from .plugin import DemoPlugin` + `PLUGIN`
+├── plugin.py              # 只有插件类 + 生命周期 + register_module(...)
+├── schemas.py             # 命令参数（CommandSchema）
+├── store.py               # 数据模型（napcat.store.Model）
+├── commands/
+│   ├── __init__.py
+│   ├── chat.py            # 对话类命令的逻辑
+│   └── admin.py           # 管理类命令的逻辑
+├── events/
+│   ├── __init__.py
+│   └── message.py         # 事件逻辑
+├── jobs/
+│   ├── __init__.py
+│   └── cleanup.py         # 定时任务逻辑
+└── data/                  # 运行时数据（config / sqlite / 缓存；不进仓库）
 ```
 
-```python
-# plugins/demo/__init__.py —— 只写这几行，别放逻辑
-"""demo —— 一句话说明这个插件干什么。"""
-from .main import DemoPlugin
-
-PLUGIN = DemoPlugin          # ← 显式声明入口类（关键）
-__all__ = ["DemoPlugin"]
-```
-
-**为什么必须写 `PLUGIN`**：框架先看 `PLUGIN`；**没写**就退回旧行为 —— 按模块属性
-的**字母序**扫第一个 `PluginBase` 子类。拆分之后 `__init__.py` 里常常顺手
-`from .base import GenericPlugin`，于是字母序靠前的**基类**被实例化：插件确实
-「加载成功」了，但跑的不是你的子类（命令没注册、行为全不对）。导出多个子类且
-没写 `PLUGIN` 时框架会告警，并告诉你实际实例化的是哪个类。
-
-`PLUGIN` 写错（不是 `PluginBase` 子类）不会让插件消失：框架告警后回退到扫描。
-
-### 14.2 最小四文件模板
+### 14.2 注册：`plugin.py`（没有逻辑）
 
 ```python
-# plugins/demo/main.py
 from napcat import PluginBase
-from .handlers import count_notes
-from .schemas import SaySchema
+from .commands import admin, chat
+from .events import message
+from .jobs import cleanup
 from .store import Note
 
 
 class DemoPlugin(PluginBase):
     name = "demo"
     version = "1.0.0"
-    description = "演示：拆包 + 数据模型"
 
     async def on_load(self):
         self.database(ensure=[Note])          # 建表 + 绑定，库在 data/demo.db
 
     async def on_enable(self):
-        @self.register_command("demo.say", schema=SaySchema,
-                               permission="", scope="all")
-        async def _say(params, event):
-            Note.objects.create(title=params.text)
-            return f"现在共 {count_notes()} 条"
+        # 只有装配：命令 / 事件 / 定时任务各归各的模块
+        self.register_module(chat, admin, message, cleanup)
+```
+
+`register_module()` 扫描模块里的 `@command` / `@event` / `@every` / `@daily` /
+`@delay` 声明，按**定义顺序**注册。卸载时框架照旧回收（命令、事件、定时器都走
+原有通道），不用写清理代码。
+
+### 14.3 逻辑：`commands/chat.py`
+
+```python
+from napcat.registry import command
+from ..schemas import SaySchema
+from ..store import Note
+
+
+@command("demo.say", schema=SaySchema, permission="", scope="all",
+         description="记一句话")
+async def say(plugin, params, event):
+    Note.objects.create(title=params.text)
+    return f"现在共 {Note.objects.count()} 条"
+```
+
+第一个参数**固定是插件实例**（`plugin`）—— 逻辑模块不需要 import 插件类，也不会
+和 `plugin.py` 互相 import 成环；`plugin.cfg` / `plugin.database()` / `plugin.api`
+都从它拿。
+
+### 14.4 逻辑：`events/` 与 `jobs/`
+
+```python
+# events/message.py
+from napcat import MessageEvent
+from napcat.registry import event
+
+
+@event(MessageEvent, description="记一条消息")
+async def on_message(plugin, event):
+    if not plugin.cfg["enabled"]:
+        return
+    ...
 ```
 
 ```python
-# plugins/demo/handlers.py
-from .store import Note
+# jobs/cleanup.py
+from napcat.registry import daily, delay, every
 
 
-def count_notes() -> int:
-    return Note.objects.count()
+@every(3600, name="demo.cleanup")
+async def cleanup(plugin):
+    ...          # 每小时
+
+
+@daily("08:00")
+async def morning(plugin):
+    ...          # 每天 08:00（本机时区，月末/闰年框架处理）
+
+
+@delay(5)
+async def warmup(plugin):
+    ...          # 启动后 5 秒跑一次
 ```
 
-```python
-# plugins/demo/schemas.py
-from napcat import CommandSchema, StrField
+### 14.5 处理器签名（框架注入什么）
 
+| 声明 | 签名 | 拿到 |
+|------|------|------|
+| `@command(..., schema=...)` | `async def h(plugin, params, event)` | 校验后的 `params`、事件 |
+| `@command(...)`（无 schema） | `async def h(plugin, packet, event)` | 原始 `CommandPacket`、事件 |
+| `@event(EventType)` | `async def h(plugin, event)` | 事件对象 |
+| `@every` / `@daily` / `@delay` | `async def h(plugin)` | 无 |
 
-class SaySchema(CommandSchema):
-    text = StrField(description="要说的话")
-```
+- 处理器**可以是同步函数**（返回值照常回给用户）；事件/定时里建议 `async`；
+- 用不到的参数可以不写（`async def h(plugin)` 也行），框架按参数名注入；
+- 事件 `hid` 默认 `插件名.函数名`，用 `@event(..., hid="...")` 可覆盖；
+- 同一模块里多个声明按**定义顺序**注册；`commands/__init__.py` 里的再导出不会
+  重复注册（`collect()` 按对象去重）。
 
-```python
-# plugins/demo/store.py
-from napcat import Model, CharField
+### 14.6 几条硬性要求
 
+1. **`__init__.py` 只写入口**（3 行）：
 
-class Note(Model):
-    title = CharField(max_length=200, index=True)
-```
+   ```python
+   """demo —— 一句话说明。"""
+   from .plugin import DemoPlugin
 
-### 14.3 几条硬性要求
+   PLUGIN = DemoPlugin
+   ```
 
-1. **包内一律相对导入**：`from .main import X` / `from .store import Note`。
+   为什么必须写 `PLUGIN`：框架先看它；没写就退回旧行为 —— 按模块属性**字母序**
+   扫第一个 `PluginBase` 子类。拆分后 `__init__.py` 里常常顺手
+   `from .base import GenericPlugin`，于是**基类**被实例化（插件"加载成功"但跑的
+   不是你的子类）。导出多个子类又没写 `PLUGIN` 时框架会告警；`PLUGIN` 写错则告警
+   后回退扫描，不会让插件消失。
+
+2. **包内一律相对导入**：`from .commands import chat` / `from ..store import Note`。
    框架加载插件时模块名是 `napcat_plugin_<名字>`，不是顶层包 —— `import main`
-   或 `from main import X` 会 `ImportError`。
-2. **`__init__.py` 会被重新执行**：热重载会清掉整棵模块树（含 `__init__`），
-   所以状态别放模块全局（会被重置）。状态放 `self.xxx`，数据放
-   `self.database()`（sqlite）或 `config`。
-3. **一个包只声明一个入口类**：其它 `PluginBase` 子类（基类、mixin）不要顺手
-   import 到 `__init__.py`；必须在的话，务必写 `PLUGIN`。
-4. **`data/` 是运行时的**：框架/发布脚本会跳过它；需要版本化的资源放
-   `assets/` 之类目录。
-5. **单文件插件仍然支持**（`plugins/foo.py`），但它没有自己的目录
-   （`self.plugin_dir` 是 `plugins/`），`self.database()` 的默认库会落在
+   会 `ImportError`。
+
+3. **`__init__.py` 会被重新执行**：热重载清整棵模块树，所以状态别放模块全局
+   （会被重置）。状态放 `self.xxx`，数据放 `self.database()` 或 `config`。
+
+4. **`data/` 是运行时的**：框架/发布脚本跳过它；需要版本化的资源放 `assets/`。
+
+5. **单文件插件仍支持**（`plugins/foo.py`），但它没有自己的目录
+   （`self.plugin_dir` 是 `plugins/`），`self.database()` 的默认库落在
    `plugins/data/foo.db` —— 逻辑一多就该拆成包。
 
-### 14.4 什么时候别拆
+### 14.7 什么时候别拆
 
-- 一百多行、只有几条命令：**单文件更省事**，拆了只是多几个 import；
+- 一百多行、只有两三条命令：**单文件更省事**，拆了只是多几个 import；
 - 逻辑要共享给多个插件：做成**独立包**（放 `napcat` 里或插件目录外），别塞进
-  某个插件的 `__init__.py` —— 那会变成隐式依赖。
+  某个插件的 `__init__.py` —— 那会变成隐式依赖；
+- 注册和逻辑分离的成本是「多一个装饰器」，收益是「找逻辑不用翻注册代码」——
+  命令超过几十条、或一个插件里有事件+定时任务时，收益明显。
 
-### 14.5 把现有插件迁过去（3 步）
+### 14.8 把现有插件迁过去（3 步）
 
-1. 把插件类整段搬到 `main.py`（辅助函数按职责分到 `handlers.py` / `utils.py`）；
-2. `__init__.py` 只留 `docstring + from .main import 类 + PLUGIN = 类`；
-3. 跑一遍：命令能不能用、热重载后新代码生不生效（框架会清模块树）、
-   `self.plugin_dir` 对不对。参考实现：`plugins/ai_chat/`（`main.py` +
-   `store.py` + `schemas.py` + `tools.py` + …，`__init__.py` 只有三行）。
+1. 把 `on_enable` 里的闭包逐个搬进 `commands/xxx.py`，函数体不动，签名改成
+   `(plugin, params, event)`，`self.` 改成 `plugin.`；
+2. 在函数上加 `@command(...)` / `@event(...)` / `@every(...)`，参数从原来的
+   `register_command` 调用里照抄；
+3. `on_enable` 换成 `self.register_module(...)`，`__init__.py` 补 `PLUGIN`。
+
+迁移后跑一遍命令、事件、定时任务与热重载（框架会清模块树）。存量插件里
+`ai_chat` 是「大包 + 按职责分模块」的例子（`__init__.py` 只有三行）。
 
 ---
 

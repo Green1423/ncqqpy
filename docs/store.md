@@ -13,6 +13,7 @@
 ## 最小例子
 
 ```python
+# store.py —— 数据模型
 from napcat import Model, CharField, IntegerField, JSONField
 
 class Note(Model):
@@ -21,18 +22,27 @@ class Note(Model):
     views = IntegerField(default=0)
     meta = JSONField(default=dict)
 
+
+# plugin.py —— 注册处只有装配（逻辑放 commands/，见 plugin-dev §14）
 class MyPlugin(PluginBase):
     name = "demo"
 
     async def on_load(self):
-        # 建表（幂等）+ 绑定 —— 之后 Note.objects 直接可用
-        self.database(ensure=[Note])
-        Note.objects.create(title="第一条", meta={"tags": ["a"]})
+        self.database(ensure=[Note])      # 建表（幂等）+ 绑定
 
     async def on_enable(self):
-        @self.register_command("demo.count")
-        async def _count(packet):
-            return f"共 {Note.objects.count()} 条"
+        from .commands import notes
+        self.register_module(notes)
+
+
+# commands/notes.py —— 逻辑
+from napcat.registry import command
+from ..store import Note
+
+@command("demo.count")
+async def count(plugin, packet, event):
+    Note.objects.create(title="第一条", meta={"tags": ["a"]})
+    return f"共 {Note.objects.count()} 条"
 ```
 
 数据库文件默认落在 **`plugins/<插件名>/data/<插件名>.db`**（`data/` 已被发布

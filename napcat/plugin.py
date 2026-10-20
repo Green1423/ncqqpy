@@ -434,6 +434,71 @@ class PluginBase(ABC):
         """取消注册命令"""
         return self.cmds.unregister(name)
 
+    # ---- 声明式注册（注册与逻辑分离，见 napcat.registry）----
+
+    def register_module(self, *modules) -> "PluginBase":
+        """把模块里用 `@command` / `@event` / `@every` 声明的处理器注册进来。
+
+        典型用法（`on_enable` 里只有装配，没有逻辑）：
+
+            from .commands import chat, admin
+            from .jobs import cleanup
+
+            class MyPlugin(PluginBase):
+                async def on_enable(self):
+                    self.register_module(chat, admin, cleanup)
+
+        处理器第一个参数固定是插件实例；其余参数按 `napcat.registry` 的约定注入。
+        返回 self，便于链式。
+        """
+        from .registry import CommandSpec, EventSpec, TimerSpec, collect
+        for spec in collect(*modules):
+            if isinstance(spec, CommandSpec):
+                self._register_command_spec(spec)
+            elif isinstance(spec, EventSpec):
+                self._register_event_spec(spec)
+            elif isinstance(spec, TimerSpec):
+                self._register_timer_spec(spec)
+        return self
+
+    def _register_command_spec(self, spec) -> None:
+        if spec.schema is not None:
+            async def shim(params=None, event=None):
+                result = spec.handler(self, params, event)
+                return await result if inspect.isawaitable(result) else result
+        else:
+            async def shim(packet=None, event=None):
+                result = spec.handler(self, packet, event)
+                return await result if inspect.isawaitable(result) else result
+        self.register_command(
+            spec.name, schema=spec.schema, permission=spec.permission,
+            scope=spec.scope, description=spec.description,
+            aliases=list(spec.aliases) or None)(shim)
+
+    def _register_event_spec(self, spec) -> None:
+        async def shim(event):
+            result = spec.handler(self, event)
+            return await result if inspect.isawaitable(result) else result
+        hid = spec.hid or f"{self.name}.{spec.handler.__name__}"
+        self.on_event(spec.event_type, hid=hid,
+                      description=spec.description)(shim)
+
+    def _register_timer_spec(self, spec) -> None:
+        async def shim():
+            result = spec.handler(self)
+            return await result if inspect.isawaitable(result) else result
+        if spec.kind == "every":
+            self.schedule(float(spec.value), name=spec.name)(shim)
+        elif spec.kind == "daily":
+            self.schedule_at(str(spec.value), name=spec.name)(shim)
+        elif spec.kind == "delay":
+            name = spec.name
+            self._timers.append(name)
+            self.timer.delay(float(spec.value), name=name,
+                             description=spec.description)(shim)
+        else:                                            # pragma: no cover - 防御
+            raise ValueError(f"未知的定时任务类型：{spec.kind!r}")
+
     def off_event(self, event_type: Type[NapCatEvent], handler: Callable) -> bool:
         """取消注册指定事件处理器。同时从 self._handlers 中移除。"""
         for i, (et, h) in enumerate(self._handlers):
