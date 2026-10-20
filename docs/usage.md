@@ -179,7 +179,7 @@ python main.py
 ```
 
 运行期失败（命令、事件处理器）会回给触发者 —— 群聊里 **@ 他**；
-生命周期失败只私聊超管。插件可抛的错误类型见 [plugin-dev.md §十五](plugin-dev.md#十五错误处理与用户反馈)。
+生命周期失败只私聊超管。插件可抛的错误类型见 [plugin-dev.md §十六](plugin-dev.md#十六错误处理与用户反馈)。
 
 ### 2.3 启动与退出
 
@@ -1246,7 +1246,7 @@ PluginManager.unload()
 > 同一编号 60 秒内重复出现只回一句短提示（不静默、也不刷屏）。
 > 策略可在 `config.json` 顶层调：`error_report.enabled / throttle_seconds /
 > show_reason / notify_superusers`。插件能抛的错误类型见
-> [plugin-dev.md §十五](plugin-dev.md#十五错误处理与用户反馈)。
+> [plugin-dev.md §十六](plugin-dev.md#十六错误处理与用户反馈)。
 
 ### 8.6.1 首次运行即初始化全部配置项
 
@@ -1259,7 +1259,7 @@ PluginManager.unload()
 - **幂等**：没有缺键就完全不写盘，有缺键也只写一次。
 
 所以「这个插件有哪些开关可改」永远能在 `config.json` 里看到，不用翻代码。
-插件侧写法见 [plugin-dev.md §14.3.1](plugin-dev.md#1431-首次运行即初始化全部配置项config_template)。
+插件侧写法见 [plugin-dev.md §15.3.1](plugin-dev.md#1531-首次运行即初始化全部配置项config_template)。
 
 ### 8.7 完整插件示例
 

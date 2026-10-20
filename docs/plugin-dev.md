@@ -46,24 +46,30 @@
     - [7.4 自定义权限节点](#74-自定义权限节点)
     - [7.5 运行时权限覆盖（`/perm` + `command_permissions`）](#75-运行时权限覆盖perm--command_permissions)
 8. [消息构造](#八消息构造)
-9. [定时任务](#九定时任务)
-10. [文件管理](#十文件管理)
-11. [完整插件示例](#十一完整插件示例)
-12. [热重载](#十二热重载)
-    - [12.1 从 GitHub 装卸插件（`plugin_manager`）](#121-从-github-装卸插件plugin_manager)
-13. [插件包结构](#十三插件包结构)
-14. [配置管理](#十四配置管理)
-    - [14.1 config.json](#141-configjson)
-    - [14.2 bind / unbind 自动持久化](#142-bind--unbind-自动持久化)
-    - [14.3 插件配置](#143-插件配置)
-        - [14.3.1 首次运行即初始化全部配置项（`config_template()`）](#1431-首次运行即初始化全部配置项config_template)
-    - [14.4 ConfigManager API](#144-configmanager-api)
-15. [错误处理与用户反馈](#十五错误处理与用户反馈)
-    - [15.1 三种写法，按你掌握的信息量选](#151-三种写法按你掌握的信息量选)
-    - [15.2 错误类型速查（`from napcat import ...`）](#152-错误类型速查from-napcat-import-)
-    - [15.3 框架怎么反馈](#153-框架怎么反馈)
-    - [15.4 配置（`config.json` 顶层）](#154-配置configjson-顶层)
-    - [15.5 插件作者要守的两条](#155-插件作者要守的两条)
+9. [数据持久化（`napcat.store`）](#九数据持久化napcatstore)
+10. [定时任务](#十定时任务)
+11. [文件管理](#十一文件管理)
+12. [完整插件示例](#十二完整插件示例)
+13. [热重载](#十三热重载)
+    - [13.1 从 GitHub 装卸插件（`plugin_manager`）](#131-从-github-装卸插件plugin_manager)
+14. [插件包结构](#十四插件包结构)
+    - [14.1 拆出 `__init__.py`（推荐写法）](#141-拆出-__init__py推荐写法)
+    - [14.2 最小四文件模板](#142-最小四文件模板)
+    - [14.3 几条硬性要求](#143-几条硬性要求)
+    - [14.4 什么时候别拆](#144-什么时候别拆)
+    - [14.5 把现有插件迁过去（3 步）](#145-把现有插件迁过去3-步)
+15. [配置管理](#十五配置管理)
+    - [15.1 config.json](#151-configjson)
+    - [15.2 bind / unbind 自动持久化](#152-bind--unbind-自动持久化)
+    - [15.3 插件配置](#153-插件配置)
+        - [15.3.1 首次运行即初始化全部配置项（`config_template()`）](#1531-首次运行即初始化全部配置项config_template)
+    - [15.4 ConfigManager API](#154-configmanager-api)
+16. [错误处理与用户反馈](#十六错误处理与用户反馈)
+    - [16.1 三种写法，按你掌握的信息量选](#161-三种写法按你掌握的信息量选)
+    - [16.2 错误类型速查（`from napcat import ...`）](#162-错误类型速查from-napcat-import-)
+    - [16.3 框架怎么反馈](#163-框架怎么反馈)
+    - [16.4 配置（`config.json` 顶层）](#164-配置configjson-顶层)
+    - [16.5 插件作者要守的两条](#165-插件作者要守的两条)
 
 ---
 
@@ -907,7 +913,7 @@ Django 风格的 `objects.create/get/filter/order_by/count/exists/values`、
 事务（可嵌套）、`ensure_schema()` 幂等补列、`await db.run(fn)` 线程逃生口。
 卸载/热重载时框架自动关闭连接。完整参考见 [`store.md`](store.md)。
 
-## 九、定时任务
+## 十、定时任务
 
 ```python
 @self.schedule(60, name="save")          # 每60秒
@@ -940,7 +946,7 @@ async def hourly_check(): ...
 
 ---
 
-## 十、文件管理
+## 十一、文件管理
 
 ```python
 # 获取图片
@@ -957,7 +963,7 @@ await self.files.upload_group_file(
 
 ---
 
-## 十一、完整插件示例
+## 十二、完整插件示例
 
 ```python
 # plugins/welcome/__init__.py
@@ -1004,7 +1010,7 @@ class WelcomePlugin(PluginBase):
 
 ---
 
-## 十二、热重载
+## 十三、热重载
 
 开发时保存文件即可自动生效（2 秒检测间隔）。也可手动触发：
 
@@ -1015,7 +1021,7 @@ class WelcomePlugin(PluginBase):
 
 关闭自动监控：`client.plugins.stop_watch()`
 
-### 12.1 从 GitHub 装卸插件（`plugin_manager`）
+### 13.1 从 GitHub 装卸插件（`plugin_manager`）
 
 框架自带 [plugins/plugin_manager](../plugins/plugin_manager/)：在**私聊**里以超管身份把插件从 GitHub
 装进来、更新、卸载。插件列表文件放在 `Green1423/ncqqpy-plugins` 的
@@ -1044,29 +1050,127 @@ class WelcomePlugin(PluginBase):
 
 ---
 
-## 十三、插件包结构
+## 十四、插件包结构
+
+### 14.1 拆出 `__init__.py`（推荐写法）
+
+插件是**包**时，`__init__.py` 只做入口导出，逻辑全放别的模块：
 
 ```
-plugins/
-├── welcome/              # 包目录格式（推荐）
-│   ├── __init__.py       # 包含 PluginBase 子类
-│   ├── utils.py          # 自定义辅助模块
-│   └── data/             # 运行时数据（更新时跟着走、卸载时默认保留）
-├── admin.py              # 单文件格式
-├── _disabled_tag.py      # 以下划线开头 → 跳过加载
-└── .trash/               # plugin_manager 的回收站（`.` 开头 → 不加载）
+plugins/demo/
+├── __init__.py      # 3 行：docstring + import + PLUGIN
+├── main.py          # 插件类：生命周期、命令/事件注册
+├── schemas.py       # 命令参数（CommandSchema）
+├── store.py         # 数据模型（napcat.store.Model）
+├── handlers.py      # 具体处理逻辑（被 main.py 调用）
+└── data/            # 运行时数据（config / sqlite / 缓存；不进仓库）
 ```
 
-> `plugins/` 下以 `.` 或 `_` 开头的目录/文件框架一律跳过（`PluginManager.
-> load_all` 与 `_plugin_names` 的判定），所以装卸过程中的备份目录
-> （`plugins/.trash/`）与半成品目录不会被当成插件加载。
-> 下载解压的暂存区在 `plugins/plugin_manager/data/.staging/`。
+```python
+# plugins/demo/__init__.py —— 只写这几行，别放逻辑
+"""demo —— 一句话说明这个插件干什么。"""
+from .main import DemoPlugin
+
+PLUGIN = DemoPlugin          # ← 显式声明入口类（关键）
+__all__ = ["DemoPlugin"]
+```
+
+**为什么必须写 `PLUGIN`**：框架先看 `PLUGIN`；**没写**就退回旧行为 —— 按模块属性
+的**字母序**扫第一个 `PluginBase` 子类。拆分之后 `__init__.py` 里常常顺手
+`from .base import GenericPlugin`，于是字母序靠前的**基类**被实例化：插件确实
+「加载成功」了，但跑的不是你的子类（命令没注册、行为全不对）。导出多个子类且
+没写 `PLUGIN` 时框架会告警，并告诉你实际实例化的是哪个类。
+
+`PLUGIN` 写错（不是 `PluginBase` 子类）不会让插件消失：框架告警后回退到扫描。
+
+### 14.2 最小四文件模板
+
+```python
+# plugins/demo/main.py
+from napcat import PluginBase
+from .handlers import count_notes
+from .schemas import SaySchema
+from .store import Note
+
+
+class DemoPlugin(PluginBase):
+    name = "demo"
+    version = "1.0.0"
+    description = "演示：拆包 + 数据模型"
+
+    async def on_load(self):
+        self.database(ensure=[Note])          # 建表 + 绑定，库在 data/demo.db
+
+    async def on_enable(self):
+        @self.register_command("demo.say", schema=SaySchema,
+                               permission="", scope="all")
+        async def _say(params, event):
+            Note.objects.create(title=params.text)
+            return f"现在共 {count_notes()} 条"
+```
+
+```python
+# plugins/demo/handlers.py
+from .store import Note
+
+
+def count_notes() -> int:
+    return Note.objects.count()
+```
+
+```python
+# plugins/demo/schemas.py
+from napcat import CommandSchema, StrField
+
+
+class SaySchema(CommandSchema):
+    text = StrField(description="要说的话")
+```
+
+```python
+# plugins/demo/store.py
+from napcat import Model, CharField
+
+
+class Note(Model):
+    title = CharField(max_length=200, index=True)
+```
+
+### 14.3 几条硬性要求
+
+1. **包内一律相对导入**：`from .main import X` / `from .store import Note`。
+   框架加载插件时模块名是 `napcat_plugin_<名字>`，不是顶层包 —— `import main`
+   或 `from main import X` 会 `ImportError`。
+2. **`__init__.py` 会被重新执行**：热重载会清掉整棵模块树（含 `__init__`），
+   所以状态别放模块全局（会被重置）。状态放 `self.xxx`，数据放
+   `self.database()`（sqlite）或 `config`。
+3. **一个包只声明一个入口类**：其它 `PluginBase` 子类（基类、mixin）不要顺手
+   import 到 `__init__.py`；必须在的话，务必写 `PLUGIN`。
+4. **`data/` 是运行时的**：框架/发布脚本会跳过它；需要版本化的资源放
+   `assets/` 之类目录。
+5. **单文件插件仍然支持**（`plugins/foo.py`），但它没有自己的目录
+   （`self.plugin_dir` 是 `plugins/`），`self.database()` 的默认库会落在
+   `plugins/data/foo.db` —— 逻辑一多就该拆成包。
+
+### 14.4 什么时候别拆
+
+- 一百多行、只有几条命令：**单文件更省事**，拆了只是多几个 import；
+- 逻辑要共享给多个插件：做成**独立包**（放 `napcat` 里或插件目录外），别塞进
+  某个插件的 `__init__.py` —— 那会变成隐式依赖。
+
+### 14.5 把现有插件迁过去（3 步）
+
+1. 把插件类整段搬到 `main.py`（辅助函数按职责分到 `handlers.py` / `utils.py`）；
+2. `__init__.py` 只留 `docstring + from .main import 类 + PLUGIN = 类`；
+3. 跑一遍：命令能不能用、热重载后新代码生不生效（框架会清模块树）、
+   `self.plugin_dir` 对不对。参考实现：`plugins/ai_chat/`（`main.py` +
+   `store.py` + `schemas.py` + `tools.py` + …，`__init__.py` 只有三行）。
 
 ---
 
-## 十四、配置管理
+## 十五、配置管理
 
-### 14.1 config.json
+### 15.1 config.json
 
 首次启动自动生成 [config.json](../config.json)，所有静态配置集中在此：
 
@@ -1089,11 +1193,11 @@ client = NapCatClient()                           # 全走 config.json
 client = NapCatClient(superusers=[111])           # 部分覆盖
 ```
 
-### 14.2 bind / unbind 自动持久化
+### 15.2 bind / unbind 自动持久化
 
 绑定/解绑群时自动同步 `config.json`，重启后保持。
 
-### 14.3 插件配置
+### 15.3 插件配置
 
 `self.config` 返回插件专属命名空间代理，读写自动隔离到 `plugins.<插件名>.*`：
 
@@ -1102,7 +1206,7 @@ class MyPlugin(PluginBase):
     name = "my_plugin"
 
     async def on_load(self):
-        # 配置项已经在加载前按 config_template() 补齐（见 14.3.1），
+        # 配置项已经在加载前按 config_template() 补齐（见 15.3.1），
         # 这里直接读就行，不用再 setdefault
         self.threshold = self.config.get("threshold")
 
@@ -1110,7 +1214,7 @@ class MyPlugin(PluginBase):
         self.config.set("last_run", time.time())
 ```
 
-#### 14.3.1 首次运行即初始化全部配置项（`config_template()`）
+#### 15.3.1 首次运行即初始化全部配置项（`config_template()`）
 
 **契约**：每个插件都要实现 `config_template()`，返回自己的**完整**默认配置；
 框架在**插件构造时**（`PluginBase.__init__`，即 `on_load()` 之前）把它补进
@@ -1159,7 +1263,7 @@ class MyPlugin(PluginBase):
 > `self.config.fill_defaults(self.config_template())`，它返回
 > `ConfigFill(filled, conflicts)`；`/aichat config` 就是这么做的。
 
-### 14.4 ConfigManager API
+### 15.4 ConfigManager API
 
 | 方法 | 说明 |
 |------|------|
@@ -1173,12 +1277,12 @@ class MyPlugin(PluginBase):
 
 ---
 
-## 十五、错误处理与用户反馈
+## 十六、错误处理与用户反馈
 
 **一句话**：插件**抛什么异常**决定用户看到什么、谁收到；**怎么发**由框架统一负责，
 插件不要自己拼「出错了」的文案。
 
-### 15.1 三种写法，按你掌握的信息量选
+### 16.1 三种写法，按你掌握的信息量选
 
 ```python
 from napcat import PluginConfigError, PluginTimeoutError, PluginRateLimitError
@@ -1206,7 +1310,7 @@ class MyPlugin(PluginBase):
 `self.errors`（`ErrorReporter`）是给**需要自己投递**的插件用的
 （例如 ai_chat 要按会话分段/出图）：`render()` 取文案、`log()` 记日志（带编号）。
 
-### 15.2 错误类型速查（`from napcat import ...`）
+### 16.2 错误类型速查（`from napcat import ...`）
 
 | 类型 | 分类文案 | 可重试 | 受众 | 用在哪 |
 |------|---------|--------|------|--------|
@@ -1219,7 +1323,7 @@ class MyPlugin(PluginBase):
 | `CommandExecutionError` | 命令失败 | — | 触发者 | 等价于「构造参数就是要回给用户的那句话」（历史写法，仍支持）|
 | `PluginLoadError` / `PluginLifecycleError` | 装载/生命周期失败 | — | **超管** | 框架在加载、`on_*` 钩子失败时用 |
 
-### 15.3 框架怎么反馈
+### 16.3 框架怎么反馈
 
 | 出错位置 | 谁收到 | 说明 |
 |---------|--------|------|
@@ -1242,7 +1346,7 @@ class MyPlugin(PluginBase):
 只回一句 `⚠️ 又出错了（E-3f21），稍后再试` —— **仍然有回应**（静默才是 bug），
 但不会把群刷屏；日志从不节流。
 
-### 15.4 配置（`config.json` 顶层）
+### 16.4 配置（`config.json` 顶层）
 
 ```json
 "error_report": {
@@ -1253,7 +1357,7 @@ class MyPlugin(PluginBase):
 }
 ```
 
-### 15.5 插件作者要守的两条
+### 16.5 插件作者要守的两条
 
 1. **不要自己 `send_xxx` 拼错误文案** —— 你的插件不会 @ 人、没有编号、不管节流；
    同类失败在群里会以 N 种写法出现。要么抛类型，要么用 `self.errors`。

@@ -120,6 +120,45 @@ class _DepsProxy:
         return True
 
 
+#: 插件包在 `__init__.py` 里用 `PLUGIN = 我的插件类` 显式声明入口类。
+#:
+#: 为什么需要它：框架原来是在模块属性里**按字母序扫第一个** `PluginBase` 子类。
+#: 拆分目录后 `__init__.py` 往往顺手 `from .base import GenericPlugin`，于是
+#: 字母序靠前的**基类**会被实例化 —— 症状是「插件加载了，但行为不是我的子类」。
+PLUGIN_ENTRY_ATTR = "PLUGIN"
+
+
+def resolve_plugin_class(module, *, name: str = "", logger=None):
+    """找出插件模块里的入口类。
+
+    优先显式声明 `PLUGIN = 类`；没写就退回旧行为（按属性名字母序取第一个），
+    但会告警 —— 多个候选时静默取第一个正是「加载了但行为不对」的常见来源。
+    """
+    explicit = getattr(module, PLUGIN_ENTRY_ATTR, None)
+    if explicit is not None:
+        if (inspect.isclass(explicit) and issubclass(explicit, PluginBase)
+                and explicit is not PluginBase):
+            return explicit
+        if logger is not None:
+            logger.warning(
+                "插件 %s 的 __init__.py 里 PLUGIN=%r 不是 PluginBase 子类，已忽略",
+                name or "?", explicit)
+    candidates: list[type] = []
+    for attr_name in dir(module):
+        attr = getattr(module, attr_name)
+        if (inspect.isclass(attr) and issubclass(attr, PluginBase)
+                and attr is not PluginBase and attr not in candidates):
+            candidates.append(attr)
+    if len(candidates) > 1 and logger is not None:
+        logger.warning(
+            "插件 %s 导出了 %d 个 PluginBase 子类（%s）；按字母序取 %s。"
+            "建议在 __init__.py 里写 `PLUGIN = %s` 显式声明入口",
+            name or "?", len(candidates),
+            ", ".join(c.__name__ for c in candidates),
+            candidates[0].__name__, candidates[0].__name__)
+    return candidates[0] if candidates else None
+
+
 class PluginBase(ABC):
     """插件基类 - 定义完整生命周期。
 
@@ -675,12 +714,7 @@ class PluginManager:
             for key in added:
                 sys.modules.pop(key, None)
             sys.modules.update(saved)      # 本来就在的（热重载中间态）原样放回
-        for attr_name in dir(module):
-            attr = getattr(module, attr_name)
-            if (inspect.isclass(attr) and issubclass(attr, PluginBase)
-                    and attr is not PluginBase):
-                return attr
-        return None
+        return resolve_plugin_class(module, name=name, logger=self.logger)
 
     def _invalidate_deps(self, changed: Optional[str] = None) -> None:
         """插件集合变了 → 依赖图作废；`changed` 相关插件的阻塞记录也作废。
@@ -939,36 +973,36 @@ class PluginManager:
             sys.modules[spec.name] = module
             spec.loader.exec_module(module)
 
-            # 查找 PluginBase 子类
+            # 查找 PluginBase 子类（优先 `__init__.py` 里的 `PLUGIN = 类`）
             plugin_instance = None
-            for attr_name in dir(module):
-                attr = getattr(module, attr_name)
-                if (inspect.isclass(attr) and issubclass(attr, PluginBase)
-                        and attr is not PluginBase):
-                    instance = attr(
-                        api=self.api, event_bus=self.event_bus,
-                        timer=self.timer, cmd_manager=self.cmd_manager,
-                        perm_manager=self.perm_manager,
-                        file_manager=self.file_manager, logger=self.logger,
-                        groups=self._groups, cfg=self._cfg, client=self._client,
-                        error_reporter=self._errors,
-                        # 单文件插件（plugins/foo.py）没有自己的目录 → 用 plugins/
-                        plugin_dir=((self.plugin_dir / name)
-                                    if (self.plugin_dir / name).is_dir() else self.plugin_dir),
-                    )
-                    if not instance.name:
-                        instance.name = name
-                    # 管理器引用：`self.deps` / 依赖自查用它拿「谁依赖谁」，
-                    # 比绕 `self.client.plugins` 可靠（客户端可能还没就绪、
-                    # 或是脚本/测试里手搓的宿主对象）。
-                    instance._manager = self
-                    plugin_instance = instance
-                    break
+            plugin_class = resolve_plugin_class(module, name=name, logger=self.logger)
+            if plugin_class is not None:
+                instance = plugin_class(
+                    api=self.api, event_bus=self.event_bus,
+                    timer=self.timer, cmd_manager=self.cmd_manager,
+                    perm_manager=self.perm_manager,
+                    file_manager=self.file_manager, logger=self.logger,
+                    groups=self._groups, cfg=self._cfg, client=self._client,
+                    error_reporter=self._errors,
+                    # 单文件插件（plugins/foo.py）没有自己的目录 → 用 plugins/
+                    plugin_dir=((self.plugin_dir / name)
+                                if (self.plugin_dir / name).is_dir() else self.plugin_dir),
+                )
+                if not instance.name:
+                    instance.name = name
+                # 管理器引用：`self.deps` / 依赖自查用它拿「谁依赖谁」，
+                # 比绕 `self.client.plugins` 可靠（客户端可能还没就绪、
+                # 或是脚本/测试里手搓的宿主对象）。
+                instance._manager = self
+                plugin_instance = instance
 
             if plugin_instance is None:
                 self.logger.warning(f"插件 {name} 未找到 PluginBase 子类")
                 await self._report_lifecycle(
-                    PluginLoadError(f"模块里没有 PluginBase 子类", plugin=name),
+                    PluginLoadError(
+                        "模块里没有 PluginBase 子类"
+                        "（拆分写法：在 __init__.py 里 `PLUGIN = 你的插件类`）",
+                        plugin=name),
                     name, "加载")
                 return None
 
