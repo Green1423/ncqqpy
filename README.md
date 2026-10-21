@@ -76,6 +76,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ./venv/bin/python -B tests/test_store.py          # sqlite ORM（数据存取）
 ./venv/bin/python -B tests/test_plugin_layout.py  # 插件目录布局（拆分 __init__.py）
 ./venv/bin/python -B tests/test_plugin_registry.py  # 声明式注册（装配与逻辑分离）
+./venv/bin/python -B tests/test_plugin_ws_decoupling.py  # 重连不重载插件
 ```
 
 其余套件（命令解析、帮助结构、权限覆盖）见 [`tests/README.md`](tests/README.md)。
@@ -95,6 +96,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_store.py` | 覆盖 |
 | `tests/test_plugin_layout.py` | 覆盖 |
 | `tests/test_plugin_registry.py` | 覆盖 |
+| `tests/test_plugin_ws_decoupling.py` | 覆盖 |
 
 ## 目录
 

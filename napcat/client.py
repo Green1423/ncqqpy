@@ -742,6 +742,8 @@ class NapCatClient:
 
         # ---- 内部状态 ----
         self._running = False
+        #: start() 是否已经跑过（防重复调用导致插件二次 load/enable）
+        self._started = False
         self._main_task: Optional[asyncio.Task] = None
         self._ws_task: Optional[asyncio.Task] = None
         self._self_id: int = 0
@@ -1001,11 +1003,11 @@ class NapCatClient:
 
     @property
     def ws_connected(self) -> bool:
-        """当前 WebSocket 是否可用（掉线/重连期间为 False）。"""
-        return self._ws.connected
+        """当前 WebSocket 是否可用（掉线/重连期间为 False；未 start 时也是 False）。"""
+        return bool(self._ws is not None and self._ws.connected)
 
     async def _on_ws_connect_failed(self, attempt: int, exc: BaseException):
-        """WebSocket 第一次连接失败 → 拉起服务器 + 通知观察者。
+        """WebSocket 第一次连接失败 → 拉起服务器 + 通知观察者（同样不碰插件生命周期）。
 
         「只拉起一次」由 `WsHandler` 保证（`failures == 1` 才回调）；这里额外挂
         `ServerLauncher` 自己的冷却时间，避免服务端反复重启。拉起是后台 task，
@@ -1034,6 +1036,7 @@ class NapCatClient:
         return result
 
     async def _on_ws_disconnected(self):
+        """连接断开：只通知观察者。**不**停用/重载插件（生命周期与连接解耦）。"""
         for hook in list(self._ws_disconnected_hooks):
             try:
                 await hook()
@@ -1043,7 +1046,11 @@ class NapCatClient:
                 self.logger.error(f"断开回调异常:\n{traceback.format_exc()}")
 
     async def _notify_ws_connected(self):
-        """连接就绪：先刷新登录信息，再通知观察者（插件需要 self_id 已就绪）。"""
+        """连接就绪：先刷新登录信息，再通知观察者（插件需要 self_id 已就绪）。
+
+        ⚠️ **不碰插件生命周期**：断线重连只影响连接，绝不 load/enable/disable/reload
+        插件。插件自己的恢复动作放在 `self.on_ws_connected(...)` 回调里。
+        """
         await self._on_ws_connected()
         for hook in list(self._ws_connected_hooks):
             try:
@@ -1054,11 +1061,35 @@ class NapCatClient:
                 self.logger.error(f"连接就绪回调异常:\n{traceback.format_exc()}")
 
     async def start(self):
+        """启动：**先插件、后连接**。
+
+        顺序是刻意的（与 WebSocket 的生命周期解耦）：
+
+        1. 插件 `load` / `enable` **在任何连接之前**跑完 —— 插件的生命周期只由
+           框架决定，不看「连没连上」；`on_load` / `on_enable` 里读
+           `ws_connected` 必然是 False（不要在钩子里依赖它，见文档 §2.2）；
+        2. 看门狗先挂上连上/断开回调，再起连接循环 —— 避免「连上了但没人监听」；
+        3. 最后才建立 WebSocket：**断线重连只影响连接本身，不会再碰插件生命周期**
+           （不重载、不停用插件；重连后的恢复动作交给 `on_ws_*` 回调）。
+        """
+        if self._started:
+            self.logger.warning("start() 被重复调用：插件已加载，忽略（不会重复 load/enable）")
+            return
+        self._started = True
         self._running = True
         self.logger.info(f"ncqqpy 正在启动... [{self.groups}]")
 
-        # WebSocket 由 run_forever() 托管：连不上就后台重试，断线自动重连，
-        # 不再让「NapCat 尚未启动」变成机器人启动失败。
+        # ① 插件先于连接就绪（生命周期与连接解耦）
+        await self.plugins.load_all()
+        await self.plugins.enable_all()
+        await self.plugins.watch(interval=2.0)
+
+        # ② 看门狗先注册回调，再起连接
+        if self.watchdog is not None:
+            await self.watchdog.start()
+
+        # ③ 最后建立连接。WebSocket 由 run_forever() 托管：连不上就后台重试，
+        #    断线自动重连 —— 这些都不会触发插件重载。
         self._ws._running = True
         self._ws.on_connected = self._notify_ws_connected
         self._ws.on_connect_failed = self._on_ws_connect_failed
@@ -1066,12 +1097,6 @@ class NapCatClient:
         self._ws_task = asyncio.create_task(self._ws.run_forever())
         self._ws._processor_task = asyncio.create_task(
             self._ws._process_loop(on_event=self._on_ws_event_safe))
-
-        await self.plugins.load_all()
-        await self.plugins.enable_all()
-        await self.plugins.watch(interval=2.0)
-        if self.watchdog is not None:
-            await self.watchdog.start()
 
         self._main_task = asyncio.current_task()
         self.logger.info("ncqqpy 启动完成")
@@ -1088,6 +1113,9 @@ class NapCatClient:
     async def stop(self):
         self.logger.info("ncqqpy 正在关闭...")
         self._running = False
+        # 允许显式 stop → start 重启（这是**框架**重启，不是 WS 重连；
+        # 那种情况下插件本来就会被卸载/重新加载，符合预期）。
+        self._started = False
         self._ws._running = False            # 先停重连循环，避免关闭时又连上
         if self.watchdog is not None:
             with contextlib.suppress(Exception):

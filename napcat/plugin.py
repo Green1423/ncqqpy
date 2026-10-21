@@ -208,6 +208,9 @@ class PluginBase(ABC):
         self._plugin_dir = Path(plugin_dir) if plugin_dir else None
         #: 本插件打开的 sqlite 库（`self.database()` 缓存；卸载时统一 close）
         self._databases: dict[str, object] = {}
+        #: 本插件注册在 client 上的连接状态回调（`self.on_ws_*`）——
+        #: 裸调 `client.on_ws_*` 不受生命周期管理，这里统一记归属，disable/unload 时注销。
+        self._client_hooks: list[tuple[str, object]] = []
         self.event_bus = event_bus
         self.timer = timer
         self.cmds = cmd_manager
@@ -353,7 +356,11 @@ class PluginBase(ABC):
         `on_enable()`，`on_load()` 也可能被再调一次，因此注册方（on_enable）
         与撤销方（on_disable）都要幂等，只靠一边不够：
         实测每回滚一次就多一份 `ai_chat._on_any_message`（/events 里能看到）。
+
+        连接状态回调（`self.on_ws_*`）也在这里一并注销：它们和事件处理器一样是
+        「插件对外的反应面」，停用后不该继续收到 WS 连上/断开。
         """
+        self._off_own_client_hooks()
         removed = 0
         while self._handlers:
             event_type, handler = self._handlers.pop()
@@ -498,6 +505,45 @@ class PluginBase(ABC):
                              description=spec.description)(shim)
         else:                                            # pragma: no cover - 防御
             raise ValueError(f"未知的定时任务类型：{spec.kind!r}")
+
+    # ---- 连接状态回调（归插件所有，随 disable/unload 注销）----
+
+    def on_ws_connected(self, callback):
+        """注册「连接就绪」回调 `async callback()`（首次连上 + 每次重连）。
+
+        与直接 `self.client.on_ws_connected(...)` 的区别：这里注册的回调**归本插件
+        所有** —— `on_disable()` / 卸载时框架自动注销。裸注册在 client 上不在生命周期
+        清理范围里，热重载后会留下旧实例的回调（实测：卸载后仍被调用）。
+        """
+        return self._track_client_hook("connected", callback)
+
+    def on_ws_disconnected(self, callback):
+        """注册「连接断开」回调 `async callback()`（归本插件所有）。"""
+        return self._track_client_hook("disconnected", callback)
+
+    def on_ws_connect_failed(self, callback):
+        """注册「连接建立不起来」回调 `async callback(attempt, exc)`（归本插件所有）。"""
+        return self._track_client_hook("connect_failed", callback)
+
+    def _track_client_hook(self, kind: str, callback):
+        client = self.client
+        if client is None:
+            raise RuntimeError(
+                "没有 client（手搓实例 / 测试宿主）：无法注册连接状态回调")
+        getattr(client, f"on_ws_{kind}")(callback)
+        self._client_hooks.append((kind, callback))
+        return callback
+
+    def _off_own_client_hooks(self) -> None:
+        """注销本插件注册的全部连接状态回调（disable / unload 都会走）。"""
+        for kind, callback in list(self._client_hooks):
+            off = getattr(self.client, f"off_ws_{kind}", None) if self.client else None
+            if off is not None:
+                try:
+                    off(callback)
+                except Exception:  # noqa: BLE001 - 注销失败不该挡住卸载
+                    self.logger.warning("注销连接回调失败（%s）", kind, exc_info=True)
+        self._client_hooks.clear()
 
     def off_event(self, event_type: Type[NapCatEvent], handler: Callable) -> bool:
         """取消注册指定事件处理器。同时从 self._handlers 中移除。"""

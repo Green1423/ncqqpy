@@ -2259,6 +2259,157 @@ async def test_table_to_image(tmp: Path):
               TableImageStore(str(tbl_dir)).available is False, "")
 
 
+async def test_pin_and_search(tmp: Path):
+    print("\n[23] 置顶持久化 + 关键词搜索")
+    from plugins.bupt_news.main import BuptNewsPlugin
+    from plugins.bupt_news.store import StateStore
+
+    data_dir = tmp / "pin-search"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    state_path = data_dir / "state.json"
+    notices_path = data_dir / "notices.jsonl"
+    store = StateStore(str(state_path), str(notices_path))
+
+    def add(title, body="", summary="", date="2026-10-08",
+            students=True, summary_ai=True):
+        return store.add_notice({
+            "key": f"1154:{title}", "newsid": str(abs(hash(title)) % 10 ** 6),
+            "treeid": "1154", "title": title, "body": body,
+            "summary": summary, "summary_ai": summary_ai,
+            "student_ai": True, "for_students": students,
+            "date": date, "images": [], "tables": [],
+        })
+
+    a = add("关于退补选选修课的通知", "本科生退补选安排", "退补选安排")
+    b = add("疫苗接种通知", "麻腮风疫苗和乙脑疫苗", "疫苗接种")
+    c = add("干部任免通知", "王尚广同志任职", "干部任免", students=False)
+    d = add("历史通知", "旧内容", "旧", date="2026-09-01")
+
+    # (a) 置顶：持久化到 state.json，重载后仍在
+    check("初始没有置顶", store.pinned_ids() == [], str(store.pinned_ids()))
+    check("置顶一条成功", store.pin(b) is True, "")
+    check("重复置顶返回 False", store.pin(b) is False, "")
+    check("置顶不存在的 id 返回 False", store.pin(99999) is False, "")
+    check("pinned_ids 记下了", store.pinned_ids() == [b], str(store.pinned_ids()))
+    check("is_pinned 正确", store.is_pinned(b) and not store.is_pinned(a), "")
+
+    reloaded = StateStore(str(state_path), str(notices_path))
+    check("★ 置顶在重载后仍然存在（持久化）",
+          reloaded.pinned_ids() == [b], str(reloaded.pinned_ids()))
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    check("★ 置顶写在 state.json 的 pins 字段",
+          raw.get("pins") == [b], str(raw.get("pins")))
+
+    # 多条置顶保持顺序（最近的在后）
+    reloaded.pin(a)
+    check("多条置顶按顺序追加", reloaded.pinned_ids() == [b, a],
+          str(reloaded.pinned_ids()))
+    check("newest_first 反转顺序", reloaded.pinned_ids(newest_first=True) == [a, b],
+          str(reloaded.pinned_ids(newest_first=True)))
+    check("取消置顶成功", reloaded.unpin(b) is True, "")
+    check("取消未置顶的返回 False", reloaded.unpin(b) is False, "")
+    check("取消后只剩一条", reloaded.pinned_ids() == [a], str(reloaded.pinned_ids()))
+    check("clear_pins 返回条数", reloaded.clear_pins() == 1, "")
+    check("清空后为空", reloaded.pinned_ids() == [], str(reloaded.pinned_ids()))
+
+    # (b) 失效置顶清理：记录被淘汰后不该留着幽灵置顶
+    reloaded.pin(b)
+    reloaded.pin(d)
+    reloaded._notices.pop(d, None)                  # 模拟 retention 淘汰
+    dropped = reloaded.prune_pins()
+    check("清理失效置顶", dropped == 1 and reloaded.pinned_ids() == [b],
+          f"dropped={dropped} pins={reloaded.pinned_ids()}")
+    raw2 = json.loads(state_path.read_text(encoding="utf-8"))
+    check("清理结果已落盘", raw2.get("pins") == [b], str(raw2.get("pins")))
+
+    # (c) 搜索：标题/摘要/正文/单位/编号都可命中，大小写不敏感
+    hits, total = store.search("疫苗")
+    check("正文关键词命中", [r["id"] for r in hits] == [b] and total == 1,
+          f"{[r['id'] for r in hits]} total={total}")
+    hits, total = store.search("退补选")
+    check("摘要关键词命中", [r["id"] for r in hits] == [a], f"{[r['id'] for r in hits]}")
+    hits, total = store.search("同志")
+    check("正文独有关键词命中", [r["id"] for r in hits] == [c], f"{[r['id'] for r in hits]}")
+    check("大小写不敏感", store.search("ABC")[1] == store.search("abc")[1], "")
+    check("无命中返回空", store.search("绝对不存在的词") == ([], 0), "")
+    check("空关键词返回空", store.search("   ") == ([], 0), "")
+
+    hits, total = store.search("通知")               # 四条标题都含"通知"
+    check("按最新在前排序", [r["id"] for r in hits] == sorted([a, b, c, d],
+                                                            reverse=True),
+          f"{[r['id'] for r in hits]}")
+    page1, total1 = store.search("通知", limit=2, page=1)
+    page2, _ = store.search("通知", limit=2, page=2)
+    check("分页：第 1 页 2 条", len(page1) == 2 and total1 == 4, f"{len(page1)}/{total1}")
+    check("分页：第 2 页不重复", not ({r["id"] for r in page1}
+                                 & {r["id"] for r in page2}), "")
+    dated, dtot = store.search("通知", date="2026-09-01")
+    check("按日期过滤", [r["id"] for r in dated] == [d] and dtot == 1,
+          f"{[r['id'] for r in dated]}")
+
+    # (d) 命令层：pin/unpin/search 的实际回复
+    from napcat.command import CommandManager
+    from napcat.permission import PermissionManager
+    from napcat.models import MessageEvent
+
+    perm = PermissionManager()
+    perm.set_superusers([1])
+    cmds = CommandManager(perm_manager=perm)
+    plugin = BuptNewsPlugin(api=None, event_bus=None, timer=None, cmd_manager=cmds,
+                            perm_manager=perm, file_manager=None, logger=_logger(),
+                            groups=None, cfg=_FakeCfg({"plugins": {"bupt_news": {
+                                "data_dir": str(data_dir),
+                                "list_page_size": 3}}}))
+    await plugin.on_load()
+    plugin._store = store
+    plugin._register_commands()
+
+    def ev(text):
+        return MessageEvent(message_type="private", user_id=1, message=text)
+
+    async def say(text):
+        r = await cmds.handle(ev(text))
+        return r if isinstance(r, str) else str(r)
+
+    store.clear_pins()
+    out = await say("/buptnews pin 2 3")
+    check("pin 支持多个编号", store.pinned_ids() == [2, 3] and "已置顶 2 条" in out,
+          f"{store.pinned_ids()} {out[:60]}")
+    out = await say("/buptnews pin 2,3，4")          # 逗号/中文逗号/去重
+    check("pin 支持逗号分隔并去重",
+          store.pinned_ids() == [2, 3, 4] and "已在置顶" in out,
+          f"{store.pinned_ids()} {out[:80]}")
+
+    out = await say("/buptnews list")
+    check("★ list 里置顶条目前置", "📌 置顶（3）" in out, out[:120])
+    check("list 置顶区内含置顶编号",
+          all(f"📌 {i} " in out for i in (2, 3, 4)), out[:200])
+
+    out = await say("/buptnews pin")
+    check("pin 无参查看置顶列表", "置顶通知（3）" in out, out[:80])
+
+    out = await say("/buptnews unpin 3")
+    check("unpin 单条", store.pinned_ids() == [2, 4] and "已取消置顶" in out,
+          f"{store.pinned_ids()}")
+    out = await say("/buptnews unpin")
+    check("unpin 无参清空全部", store.pinned_ids() == [] and "全部置顶" in out,
+          f"{store.pinned_ids()} {out[:60]}")
+
+    out = await say("/buptnews search 疫苗")
+    check("★ search 命中并显示标题", "疫苗接种通知" in out and "命中 1 条" in out,
+          out[:120])
+    out = await say("/buptnews search 绝对不存在的词")
+    check("search 无命中给明确提示", "没有找到" in out, out[:60])
+    out = await say("/buptnews search 通知 1 2")
+    check("search 分页参数生效", "第 2/4 页" in out or "第 2/" in out, out[:80])
+
+    # 置顶标记也要出现在搜索结果里
+    store.pin(b)
+    out = await say("/buptnews search 疫苗")
+    check("搜索结果标出置顶", "📌" in out, out[:80])
+    store.clear_pins()
+
+
 async def _cleanup_artifacts():
     for stale in (ROOT / "napcat" / "data").glob("qrcode_sent_*.png"):
         try:
@@ -2297,6 +2448,7 @@ async def main():
     await test_student_judgement(tmp)
     await test_digest_not_blocked_by_backfill(tmp)
     await test_table_to_image(tmp)
+    await test_pin_and_search(tmp)
     await _cleanup_artifacts()
     print(f"\n===== 通过 {PASSED} 项，失败 {FAILED} 项 =====")
     return 1 if FAILED else 0

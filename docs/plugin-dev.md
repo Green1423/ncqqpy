@@ -191,7 +191,7 @@ class ReportPlugin(PluginBase):
 | `self.errors` | `ErrorReporter` | **错误反馈器**：`render()` / `report()` / `log()`，见 [§十五](#十五错误处理与用户反馈) |
 | `self.deps` | `_DepsProxy` | **依赖访问**：`get()` / `has()` / `enabled()` / `require()`，见 [§1.3](#13-声明依赖别的插件必需--可选) |
 | `self._groups` | `GroupBinding` | 群组绑定管理器 |
-| `self.client` | `NapCatClient` | 主客户端（连接状态、`launcher` 等；见 [§2.2](#22-读取连接状态--拉起结果selfclient)） |
+| `self.client` | `NapCatClient` | 主客户端（**只读**：连接状态、`launcher` 结果；注册回调请用 `self.on_ws_*`，见 [§2.2](#22-读取连接状态--拉起结果selfclient)） |
 
 ### 2.1 快捷方法
 
@@ -230,24 +230,37 @@ class ReportPlugin(PluginBase):
 ### 2.2 读取连接状态 / 拉起结果（`self.client`）
 
 机器人掉线时往往**不能靠 QQ 自己报告**，需要插件观察 WebSocket 状态。
-`NapCatClient` 暴露三个注册接口（回调都是 `async`，可注册多个）：
+
+> **生命周期与连接是解耦的**：插件在**任何连接之前**就完成 `load` / `enable`；
+> 之后断线、重连、服务端重启都**不会**触发插件重载（不 `on_load` / `on_enable` /
+> `on_disable` / `on_unload`，实例也不换）。所以：
+>
+> - `on_load` / `on_enable` 里读 `ws_connected` **必然是 False**，别用它做分支；
+> - 也不要在 `on_load` / `on_enable` 里调 API（那时还没连上）；
+> - 「连上之后要做什么」放连接回调里 —— 这是唯一的恢复入口。
+
+三个注册接口都挂在 `PluginBase` 上（回调都是 `async`）：
 
 ```python
 class MyPlugin(PluginBase):
     async def on_enable(self):
-        @self.client.on_ws_connect_failed
+        @self.on_ws_connect_failed
         async def on_failed(attempt: int, exc: BaseException):
             """连接建立不起来（服务器没上线）。每轮连续失败只触发第 1 次。"""
             self.logger.warning(f"连不上（第 {attempt} 次）: {exc!r}")
 
-        @self.client.on_ws_connected
+        @self.on_ws_connected
         async def on_connected():
             """连接就绪（首次连上 + 每次重连）。此时 self.client.self_id 已刷新。"""
 
-        @self.client.on_ws_disconnected
+        @self.on_ws_disconnected
         async def on_disconnected():
             """曾经连上过之后断开。启动时连不上走 on_ws_connect_failed。"""
 ```
+
+这几个回调**归插件所有**：`on_disable()` / 卸载时框架自动注销；重新启用时在
+`on_enable` 里重新注册即可。直接调 `self.client.on_ws_*` 也有效，但**不受生命周期
+管理**（框架内部看门狗才那么用）—— 热重载后会留下旧实例的回调，别这么写。
 
 | 属性 / 方法 | 说明 |
 |------|------|
