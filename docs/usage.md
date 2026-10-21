@@ -59,6 +59,7 @@
     - [7.3 手动权限检查](#73-手动权限检查)
     - [7.4 自定义权限节点](#74-自定义权限节点)
     - [7.5 用命令改权限（`/perm`）](#75-用命令改权限perm)
+    - [7.6 用户级权限（`/userperm`）](#76-用户级权限userperm)
 8. [插件开发](#八插件开发)
     - [8.1 插件基类](#81-插件基类)
     - [8.2 插件内置便捷方法](#82-插件内置便捷方法)
@@ -1024,7 +1025,8 @@ superuser (100) > owner (80) > admin (60) > member (20) > everyone (0)
 ```
 
 - **superuser** 拥有所有权限，通过 `NapCatClient(superusers=[...])` 配置
-- **owner/admin/member** 从群事件中自动缓存，`GroupAdminEvent` 触发时自动更新
+- **owner/admin/member** 从**每条消息的 `sender.role`** 缓存（`GroupAdminEvent` 变更时也会更新）——
+  所以群主 / 管理员**默认至少是 admin**，启动后不需要先发生一次管理员变更
 - `"everyone"` 权限始终判定为通过
 
 ### 7.2 命令权限绑定
@@ -1107,6 +1109,47 @@ async def cmd_vip(packet):
 - 超级用户在任何情况下都不受权限限制（`check()` 对超级用户无条件通过），所以不存在
   「把自己锁在外面」：改坏了照样能用 `/perm` 改回来。
 - `/perm` 本身是**仅私聊 + 仅超级用户**，与 `/stop`、`/pause`、`/reload` 同档。
+
+### 7.6 用户级权限（`/userperm`）
+
+`/perm` 改的是「**命令**要求什么权限」，`/userperm` 改的是「**这个人**算几级」。
+仅私聊 + 仅超级用户可用（与 `/perm` 同档）。
+
+```
+/userperm                             列出全部用户级覆盖
+/userperm list 123456                 只看某个群的覆盖
+/userperm get 987654                  查看某人当前生效的级别与来源
+/userperm set 987654 admin            设为**全局** admin（所有场景）
+/userperm set 987654 member 123456    仅在该群内设为 member
+/userperm set 987654 admin --group=123456   同上（键值写法）
+/userperm clear 987654                清除全局覆盖
+/userperm clear 987654 123456         清除该群内的覆盖
+```
+
+优先级（高 → 低）：
+
+```
+群内覆盖 > 全局覆盖 > 群角色（群主/管理员默认 admin）> 默认成员
+```
+
+- **可设置级别**：`owner` / `admin` / `member` / `everyone`。**不能设 `superuser`** ——
+  超管只能在 `config.json` 的 `superusers` 里配（一条命令就能提到最高级 = 权限系统没有边界）；
+  给超管设覆盖也会被拒绝并提示「超管不受用户级覆盖影响」；
+- **给群号 = 仅该群**；不给 = 全局。群内覆盖只影响那一个群，别的群仍按全局/群角色算；
+- 群主 / 管理员默认 admin，所以通常**不需要**给每个管理员单独配；只有「想在群里降级某个
+  管理员」或「想让普通成员在某群能管理」时才用；
+- 改动落盘到 [config.json](../config.json)：
+
+  ```json
+  "user_permissions": {
+    "users":  { "987654": "admin" },
+    "groups": { "123456": { "987654": "member" } }
+  }
+  ```
+
+  启动时恢复；手写这个键也可以 —— 非法 QQ / 非法级别只记 warning 并跳过那一条，
+  不会让机器人起不来；全部清空时键会被删掉；
+- 插件的 `await self.perm.check(...)` / `check_role(...)` 会自动套用这些覆盖，插件不用改。
 
 ---
 

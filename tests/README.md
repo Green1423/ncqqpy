@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -21,6 +21,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_plugin_layout.py` | 插件目录布局（拆分 __init__.py / PLUGIN 声明 / 热重载） |
 | `test_plugin_registry.py` | 声明式注册（注册处只装配 / 逻辑分模块 / 卸载回收） |
 | `test_plugin_ws_decoupling.py` | 生命周期与 WebSocket 解耦（重连不重载插件） |
+| `test_userperm.py` | 用户级权限（全局/群内覆盖、优先级、群角色默认 admin、持久化） |
 
 ## 依赖插件的用例会自动跳过
 

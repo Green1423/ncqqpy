@@ -2395,19 +2395,178 @@ async def test_pin_and_search(tmp: Path):
     check("unpin 无参清空全部", store.pinned_ids() == [] and "全部置顶" in out,
           f"{store.pinned_ids()} {out[:60]}")
 
-    out = await say("/buptnews search 疫苗")
+    # 默认会同时搜门户（这里没有门户桩），所以显式限定本地
+    out = await say("/buptnews search 疫苗 --source=local")
     check("★ search 命中并显示标题", "疫苗接种通知" in out and "命中 1 条" in out,
           out[:120])
-    out = await say("/buptnews search 绝对不存在的词")
+    out = await say("/buptnews search 绝对不存在的词 --source=local")
     check("search 无命中给明确提示", "没有找到" in out, out[:60])
-    out = await say("/buptnews search 通知 1 2")
-    check("search 分页参数生效", "第 2/4 页" in out or "第 2/" in out, out[:80])
+    out = await say("/buptnews search 通知 1 2 --source=local")
+    check("search 分页参数生效", "第 2 页" in out and "每页 1" in out, out[:90])
 
     # 置顶标记也要出现在搜索结果里
     store.pin(b)
     out = await say("/buptnews search 疫苗")
     check("搜索结果标出置顶", "📌" in out, out[:80])
     store.clear_pins()
+
+
+async def test_portal_search(tmp: Path):
+    print("\n[24] 门户检索：解析/分页/合并/降级/get 链接")
+    from plugins.bupt_news import portal as pt
+    from plugins.bupt_news.main import BuptNewsPlugin
+    from plugins.bupt_news.store import StateStore
+
+    # (a) 结果解析：日期在 <li> **外面**（独立 <td>），不能复用 parse_list
+    row = ('<tr><li><td><a href="xntz_content.jsp?urltype=news.NewsContentUrl'
+           '&wbtreeid=1759&wbnewsid=142679" style="x">疫苗通知标题</a>&nbsp;'
+           '<span>点击数：7271</span></td></li>'
+           '<td align="right"><span>2026-10-08</span></td></tr>')
+    got = pt.parse_search_results(row)
+    check("门户结果解析出 1 条", len(got) == 1, str(len(got)))
+    if got:
+        n = got[0]
+        check("门户结果带日期（在 <li> 外也能取到）", n.date == "2026-10-08", repr(n.date))
+        check("门户结果带 treeid/newsid", (n.treeid, n.newsid) == ("1759", "142679"),
+              f"{n.treeid}:{n.newsid}")
+        check("门户结果标题正确", n.title == "疫苗通知标题", repr(n.title))
+        check("门户结果 URL 绝对化", n.url.startswith("http://"), n.url[:40])
+
+    check("总数解析「共 23816 条」", pt.parse_search_total("x 共23816条 y") == 23816, "")
+    check("总数缺失时为 0", pt.parse_search_total("no count") == 0, "")
+    # 同一通知被挂到多个子站时，按 treeid:newsid 去重
+    dup = row + row.replace("1759", "1759")
+    check("重复结果被去重", len(pt.parse_search_results(dup)) == 1, "")
+
+    # (b) 表单树 id 提取（写死会漏栏目）
+    page_html = ('<form action="fz_ssjg.jsp?wbtreeid=1154" method="post">'
+                 "<input type='hidden' name='wbtreeids' value=1155,1158,1159>"
+                 "</form>")
+    form = pt._search_form(page_html, "1154")
+    check("从页面读到栏目树 id", form["treeids"] == "1155,1158,1159", str(form))
+    check("没有表单时返回空（退回全站检索）",
+          pt._search_form("<html></html>", "1154")["treeids"] == "", "")
+
+    # (c) 命令层：本地 + 门户合并、门户失败降级、source/content 生效
+    from napcat.command import CommandManager
+    from napcat.permission import PermissionManager
+    from napcat.models import MessageEvent
+
+    data_dir = tmp / "portal-search"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    store = StateStore(str(data_dir / "state.json"), str(data_dir / "notices.jsonl"))
+    local_id = store.add_notice({
+        "key": "1154:142679", "newsid": "142679", "treeid": "1759",
+        "title": "本地：2026级新生接种麻腮风疫苗", "body": "本地正文",
+        "summary": "本地摘要", "summary_ai": True, "student_ai": True,
+        "for_students": True, "date": "2026-10-08", "images": [], "tables": []})
+
+    perm = PermissionManager()
+    perm.set_superusers([1])
+    cmds = CommandManager(perm_manager=perm)
+    plugin = BuptNewsPlugin(api=None, event_bus=None, timer=None, cmd_manager=cmds,
+                            perm_manager=perm, file_manager=None, logger=_logger(),
+                            groups=None, cfg=_FakeCfg({"plugins": {"bupt_news": {
+                                "data_dir": str(data_dir)}}}))
+    await plugin.on_load()
+    plugin._store = store
+    plugin._register_commands()
+
+    class _PortalStub:
+        def __init__(self):
+            self.calls = []
+            self.fail = False
+
+        async def search(self, keyword, *, page=1, page_size=10, content=True):
+            self.calls.append((keyword, page, content))
+            if self.fail:
+                raise RuntimeError("门户 500")
+            items = [pt.Notice(column="1759", newsid="142679", treeid="1759",
+                               title="本地：2026级新生接种麻腮风疫苗",
+                               date="2026-10-08",
+                               url="http://my.bupt.edu.cn/xntz_content.jsp"
+                                   "?urltype=news.NewsContentUrl&wbtreeid=1759"
+                                   "&wbnewsid=142679"),
+                     pt.Notice(column="1196", newsid="45767", treeid="1196",
+                               title="2017级研究生注射麻腮风疫苗",
+                               date="2017-10-09",
+                               url="http://my.bupt.edu.cn/xntz_content.jsp"
+                                   "?urltype=news.NewsContentUrl&wbtreeid=1196"
+                                   "&wbnewsid=45767")]
+            return {"total": 2, "page": page, "pages": 1, "size": page_size,
+                    "items": items}
+
+    stub = _PortalStub()
+    plugin._portal = stub
+
+    async def say(text):
+        r = await cmds.handle(MessageEvent(message_type="private", user_id=1,
+                                           message=text))
+        return r if isinstance(r, str) else str(r)
+
+    out = await say("/buptnews search 麻腮风")
+    check("★ 默认同时搜本地与门户",
+          "本地" in out and "信息门户" in out, out[:120])
+    check("★ 本地已有编号直接给出",
+          f"{local_id}" in out, out[:200])
+    check("门户独有结果也给 get 链接",
+          "/buptnews get http://my.bupt.edu.cn" in out, out[-300:])
+    check("本地库里已有的门户结果标出编号（可 get 编号）",
+          f"#{local_id}" in out, out[:300])
+
+    stub.calls.clear()
+    out = await say("/buptnews search 麻腮风 --source=local")
+    check("source=local 不请求门户", stub.calls == [], str(stub.calls))
+    check("source=local 不含门户段", "信息门户" not in out, out[:80])
+
+    plugin._portal_search_cache.clear()      # 上一步 all 已缓存同参数结果
+    out = await say("/buptnews search 麻腮风 --source=portal")
+    check("source=portal 只请求门户", len(stub.calls) == 1, str(stub.calls))
+    check("source=portal 不含本地库条目",
+          "📚 本地库" not in out and "🌐 信息门户" in out, out[:160])
+
+    stub.calls.clear()
+    out = await say("/buptnews search 麻腮风 --content=false")
+    check("content=false 传给门户", stub.calls and stub.calls[0][2] is False,
+          str(stub.calls))
+    # 5 分钟内重复搜索命中缓存（同样参数不再打门户）
+    stub.calls.clear()
+    await say("/buptnews search 麻腮风 --content=false")
+    check("★ 同参数短时缓存命中（不重复请求门户）", stub.calls == [], str(stub.calls))
+
+    # 门户故障 → 降级为本地结果 + 明确提示
+    stub.fail = True
+    plugin._portal_search_cache.clear()
+    out = await say("/buptnews search 麻腮风 --content=true")
+    check("★ 门户失败时仍给本地结果", "本地库" in out and str(local_id) in out, out[:160])
+    check("门户失败有明确提示", "门户检索失败" in out, out[-200:])
+    stub.fail = False
+
+    # (d) get 支持链接（门户结果没有本地编号）
+    class _DetailPortal:
+        def __init__(self):
+            self.urls = []
+
+        async def fetch_detail(self, url):
+            self.urls.append(url)
+            return {"title": "门户里的旧通知", "dept": "后勤部",
+                    "date": "2017-10-09", "body": "旧通知正文内容",
+                    "images": [], "tables": []}
+
+    detail = _DetailPortal()
+    plugin._portal = detail
+    chain = await plugin._render_notice(
+        {"title": "门户里的旧通知", "dept": "后勤部", "date": "2017-10-09",
+         "body": "旧通知正文内容", "url": "http://x/1", "images": [], "tables": [],
+         "student_ai": False},
+        prefix="🔗 ")
+    txt = " ".join(str(x.get("data", {}).get("text", ""))
+                   for x in (chain.build() if hasattr(chain, "build")
+                             else sum((c.build() for c in chain), []))
+                   if x.get("type") == "text")
+    check("★ 门户临时记录能渲染出全文", "旧通知正文内容" in txt, txt[:80])
+    check("★ 门户临时记录不显示假摘要（降级标题）",
+          "🤖" not in txt, txt[:80])
 
 
 async def _cleanup_artifacts():
@@ -2449,6 +2608,7 @@ async def main():
     await test_digest_not_blocked_by_backfill(tmp)
     await test_table_to_image(tmp)
     await test_pin_and_search(tmp)
+    await test_portal_search(tmp)
     await _cleanup_artifacts()
     print(f"\n===== 通过 {PASSED} 项，失败 {FAILED} 项 =====")
     return 1 if FAILED else 0

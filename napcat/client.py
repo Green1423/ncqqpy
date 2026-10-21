@@ -709,6 +709,11 @@ class NapCatClient:
         # ---- 子系统 ----
         self.api = ApiClient(self._ws)
         self.perm = PermissionManager(superusers=superusers or [])
+        # 用户级权限覆盖（/userperm 写进 config.json 的 user_permissions）：
+        # 非法条目只告警、不阻断启动 —— 配置是给人手改的。
+        for _note in self.perm.import_user_levels(
+                self.cfg.get("user_permissions", {}) or {}):
+            self.logger.warning("[perm] %s", _note)
         # 错误反馈业主：所有「插件/框架出错了该跟谁说、说什么、多久内不重复」
         # 的判断都收敛在这里（见 napcat/errors.py）。子系统只负责把异常交给它。
         error_cfg = self.cfg.get("error_report", {}) or {}
@@ -846,6 +851,15 @@ class NapCatClient:
         """从 WsHandler 收到事件 → 群绑定过滤 → 分发到 EventBus"""
         if isinstance(event, MessageEvent):
             event._api = self.api
+            # 群角色缓存：OneBot 在**每条消息**里都带 sender.role。只靠
+            # GroupAdminEvent 的话，启动后没发生过管理员变更的群，群主/管理员
+            # 会被当成普通成员 —— 「群主/管理员默认管理员权限」就失效了。
+            if event.message_type == "group" and event.group_id is not None:
+                role = getattr(event.sender, "role", None) if event.sender else None
+                role = getattr(role, "value", role)
+                if role in ("owner", "admin", "member"):
+                    self.perm.set_group_role(int(event.group_id),
+                                             int(event.user_id), str(role))
             if (event.message_type == "group"
                     and event.group_id is not None
                     and not self.groups.is_bound(event.group_id)):

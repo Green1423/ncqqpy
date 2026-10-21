@@ -8,6 +8,11 @@ from typing import Optional, Callable, Awaitable
 from enum import Enum
 
 
+#: `/userperm` 能设置的级别 —— **不含 superuser**：超管只能在 `config.json` 的
+#: `superusers` 里配。一条指令就能把自己提到最高级，等于权限系统没有边界。
+ASSIGNABLE_USER_LEVELS = ("owner", "admin", "member", "everyone")
+
+
 class DefaultPermission(str, Enum):
     SUPERUSER = "superuser"
     OWNER = "owner"
@@ -52,8 +57,14 @@ class PermissionManager:
     def __init__(self, superusers: list[int] = None):
         self._superusers: set[int] = set(superusers or [])
         self._custom_checkers: dict[str, Callable] = {}
-        # {group_id: {user_id: role}}
+        # {group_id: {user_id: role}} —— 群角色缓存（owner/admin/member）
         self._group_roles: dict[int, dict[int, str]] = {}
+        # 显式覆盖（`/userperm` / config.json 的 user_permissions）：
+        #   _user_levels        {user_id: level}                全局
+        #   _group_user_levels  {group_id: {user_id: level}}    仅该群
+        # 优先级：群内覆盖 > 全局覆盖 > 群角色（群主/管理员）> 默认成员
+        self._user_levels: dict[int, str] = {}
+        self._group_user_levels: dict[int, dict[int, str]] = {}
 
     # ---- 超级用户管理 ----
 
@@ -89,6 +100,135 @@ class PermissionManager:
         if group_id not in self._group_roles:
             self._group_roles[group_id] = {}
         self._group_roles[group_id].update(roles)
+
+    # ---- 用户级权限覆盖（/userperm）----
+
+    @staticmethod
+    def _level(value) -> str:
+        raw = getattr(value, "value", value)
+        return str(raw).strip().lower()
+
+    def set_user_level(self, user_id: int, level: str, *,
+                       group_id: Optional[int] = None) -> None:
+        """设置用户级覆盖：`group_id` 为空 = 全局；给了 = 仅在该群生效。"""
+        level = self._level(level)
+        if level not in ASSIGNABLE_USER_LEVELS:
+            raise ValueError(
+                f"不可设置的权限级别：{level!r}"
+                f"（可用：{' / '.join(ASSIGNABLE_USER_LEVELS)}）")
+        uid = int(user_id)
+        if group_id:
+            self._group_user_levels.setdefault(int(group_id), {})[uid] = level
+        else:
+            self._user_levels[uid] = level
+
+    def clear_user_level(self, user_id: int, *,
+                         group_id: Optional[int] = None) -> bool:
+        """清除覆盖，返回原来是否存在（全局与群内是两套，互不影响）。"""
+        uid = int(user_id)
+        if group_id:
+            table = self._group_user_levels.get(int(group_id), {})
+            existed = table.pop(uid, None) is not None
+            if not table:
+                self._group_user_levels.pop(int(group_id), None)
+            return existed
+        return self._user_levels.pop(uid, None) is not None
+
+    def user_level_override(self, user_id: int, *,
+                            group_id: Optional[int] = None) -> tuple[str, str]:
+        """命中的覆盖：`(级别, 来源)`；没有覆盖返回 `("", "")`。群内优先于全局。"""
+        uid = int(user_id)
+        if group_id:
+            level = self._group_user_levels.get(int(group_id), {}).get(uid)
+            if level:
+                return level, "群内覆盖"
+        level = self._user_levels.get(uid)
+        if level:
+            return level, "全局覆盖"
+        return "", ""
+
+    def user_level_source(self, user_id: int, *, group_id: Optional[int] = None,
+                          is_group: bool = False) -> str:
+        """这个人在该上下文里的级别来自哪里（诊断/`/userperm get` 用）。"""
+        level, source = self.user_level_override(
+            user_id, group_id=group_id if is_group else None)
+        if level:
+            return source
+        if is_group and group_id:
+            role = self.get_group_role(int(group_id), int(user_id))
+            if role in self.ROLE_HIERARCHY:
+                return f"群角色（{role}）"
+        return "默认成员"
+
+    def effective_user_level(self, user_id: int, *, group_id: Optional[int] = None,
+                             is_group: bool = False) -> int:
+        """当前上下文里的等级分数（0~100）。"""
+        return self._resolve_user_level(int(user_id), group_id, is_group)
+
+    def export_user_levels(self) -> dict:
+        """导出成配置结构（空的部分不出现，避免 config.json 里堆空对象）。"""
+        data: dict = {}
+        if self._user_levels:
+            data["users"] = {str(uid): lv
+                             for uid, lv in sorted(self._user_levels.items())}
+        if self._group_user_levels:
+            data["groups"] = {
+                str(gid): {str(uid): lv for uid, lv in sorted(table.items())}
+                for gid, table in sorted(self._group_user_levels.items())}
+        return data
+
+    def import_user_levels(self, data) -> list[str]:
+        """从配置恢复覆盖。容错：非法 id / 非法级别跳过并返回说明（不抛异常）。
+
+        配置是给人手改的，写错一个键不该让整个权限系统起不来 —— 但也不能静默，
+        调用方把返回的说明打进日志。
+        """
+        notes: list[str] = []
+        if not data:
+            return notes
+        if not isinstance(data, dict):
+            return [f"user_permissions 不是对象（{type(data).__name__}），已忽略"]
+
+        def _uid(raw) -> int:
+            try:
+                uid = int(str(raw).strip())
+            except (TypeError, ValueError):
+                raise ValueError(f"非法 QQ：{raw!r}") from None
+            if uid <= 0:
+                raise ValueError(f"非法 QQ：{raw!r}")
+            return uid
+
+        users = data.get("users") or {}
+        if isinstance(users, dict):
+            for raw_uid, raw_level in users.items():
+                try:
+                    level = self._level(raw_level)
+                    if level not in ASSIGNABLE_USER_LEVELS:
+                        raise ValueError(f"非法级别：{raw_level!r}")
+                    self.set_user_level(_uid(raw_uid), level)
+                except ValueError as exc:
+                    notes.append(f"user_permissions.users.{raw_uid}：{exc}")
+        groups = data.get("groups") or {}
+        if isinstance(groups, dict):
+            for raw_gid, table in groups.items():
+                if not isinstance(table, dict):
+                    notes.append(f"user_permissions.groups.{raw_gid} 不是对象，已忽略")
+                    continue
+                try:
+                    gid = _uid(raw_gid)
+                except ValueError as exc:
+                    notes.append(f"user_permissions.groups：{exc}")
+                    continue
+                for raw_uid, raw_level in table.items():
+                    try:
+                        level = self._level(raw_level)
+                        if level not in ASSIGNABLE_USER_LEVELS:
+                            raise ValueError(f"非法级别：{raw_level!r}")
+                        self.set_user_level(_uid(raw_uid), level, group_id=gid)
+                    except ValueError as exc:
+                        notes.append(
+                            f"user_permissions.groups.{raw_gid}.{raw_uid}：{exc}")
+        return notes
 
     # ---- 自定义权限节点 ----
 
@@ -152,16 +292,28 @@ class PermissionManager:
 
     def _resolve_user_level(self, user_id: int, group_id: Optional[int],
                             is_group: bool) -> int:
-        """计算用户在当前上下文中的等级分数"""
+        """计算用户在当前上下文中的等级分数。
+
+        优先级（高 → 低）：
+        1. 超管（config.json `superusers`，不可被用户级覆盖降级）；
+        2. **群内覆盖**（`/userperm set <QQ> <级别> <群号>`）；
+        3. **全局覆盖**（`/userperm set <QQ> <级别>`）；
+        4. **群角色**（群主 owner / 管理员 admin —— 由每条消息的 `sender.role`
+           与群管理变更事件共同维护，所以「群主/管理员默认是管理员权限」）；
+        5. 默认成员（私聊 / 无群上下文同样落在这里）。
+        """
         if user_id in self._superusers:
             return 100
 
+        level, _source = self.user_level_override(
+            user_id, group_id=group_id if is_group else None)
+        if level:
+            return self.ROLE_HIERARCHY.get(level, self.ROLE_HIERARCHY["member"])
+
         if is_group and group_id and group_id in self._group_roles:
-            # 群聊：查群角色
             role = self._group_roles[group_id].get(user_id, "member")
             return self.ROLE_HIERARCHY.get(role, 0)
 
-        # 私聊 / 无群上下文：无角色区分，所有人平级
         return self.ROLE_HIERARCHY["member"]
 
     async def check_role(self, user_id: int, role: str,

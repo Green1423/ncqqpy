@@ -817,6 +817,10 @@ except ApiError as e:
 superuser(100) > owner(80) > admin(60) > member(20) > everyone(0)
 ```
 
+**群主 / 管理员默认至少 admin**：客户端在每条群消息上按 `sender.role` 刷新群角色缓存
+（`GroupAdminEvent` 变更时也更新），所以插件里 `check(..., "admin", group_id=gid,
+is_group=True)` 对群管理员直接通过，不需要先等一次管理员变更事件。
+
 ### 7.2 命令权限绑定
 
 ```python
@@ -842,6 +846,30 @@ is_admin = await self.perm.check_role(user_id=123, role="admin", group_id=456)
 async def check_vip(user_id, group_id, is_group):
     return user_id in my_vip_database
 ```
+
+### 7.4.1 用户级权限覆盖（`/userperm`）
+
+超管可在私聊用 `/userperm` 改「某个人算几级」（全局或仅某个群），改动写进
+`config.json` 的 `user_permissions`：
+
+```
+/userperm set 987654 admin              全局 admin
+/userperm set 987654 member 123456      仅群 123456 内为 member
+/userperm clear 987654 123456
+```
+
+优先级：**群内覆盖 > 全局覆盖 > 群角色 > 默认成员**。可设置 `owner` / `admin` /
+`member` / `everyone`（**不含 superuser**）。插件的 `self.perm.check()/check_role()`
+自动套用，不用改代码。程序化写入：
+
+```python
+self.perm.set_user_level(uid, "admin")                 # 全局
+self.perm.set_user_level(uid, "admin", group_id=123)   # 仅该群
+self.perm.clear_user_level(uid, group_id=123)
+self.perm.user_level_source(uid, group_id=123, is_group=True)   # 来源诊断
+```
+
+详见 [usage.md §7.6](usage.md#76-用户级权限userperm)。
 
 ### 7.5 运行时权限覆盖（`/perm` + `command_permissions`）
 

@@ -22,6 +22,8 @@ from .errors import (                                    # noqa: E402
     CommandExecutionError, ErrorReporter, NapCatError, PluginRuntimeError,
     short_reason,
 )
+#: `/userperm` 可设置的级别（与 PermissionManager 共用一份，别写两套）
+from .permission import ASSIGNABLE_USER_LEVELS          # noqa: E402
 
 
 class ValidationError(Exception):
@@ -1600,6 +1602,221 @@ class CommandManager:
         self._install_handler("perm", CommandHandler(
             "perm", _cmd_perm, description="查看/设置命令权限覆盖",
             usage="perm <list|get|set|reset> ...", scope="private",
+            permission="superuser", permission_manager=self._perm_manager))
+
+        # ---- /userperm：用户级权限覆盖（superuser · 私聊）----
+        #
+        # 与 /perm 的分工：
+        #   /perm     = 改**命令**要求的权限（谁有资格用某条命令）；
+        #   /userperm = 改**用户**的权限级别（这个人在全局/某个群里算几级）。
+        # 优先级：群内覆盖 > 全局覆盖 > 群角色（群主/管理员默认 admin）> 默认成员。
+
+        def _userperm_qq(raw: str) -> int:
+            text = str(raw or "").strip().lstrip("@")
+            if text.lower().startswith("qq="):
+                text = text[3:]
+            if not text.isdigit() or int(text) <= 0:
+                raise ValueError(f"非法 QQ：{raw!r}")
+            return int(text)
+
+        def _userperm_levels() -> str:
+            return " / ".join(ASSIGNABLE_USER_LEVELS)
+
+        def _userperm_where(group_id: int) -> str:
+            return f"群 {group_id} 内" if group_id else "全局"
+
+        def _userperm_effective(uid: int, group_id: int) -> str:
+            perm = self._perm_manager
+            level = perm.user_level_override(uid, group_id=group_id or None)[0]
+            source = perm.user_level_source(uid, group_id=group_id or None,
+                                            is_group=bool(group_id))
+            score = perm.effective_user_level(uid, group_id=group_id or None,
+                                              is_group=bool(group_id))
+            name = next((n for n, v in perm.ROLE_HIERARCHY.items() if v == score),
+                        str(score))
+            return f"{name}（来源：{source}）"
+
+        def _userperm_list(group_id: Optional[int] = None) -> str:
+            perm = self._perm_manager
+            data = perm.export_user_levels()
+            users = data.get("users", {})
+            groups = data.get("groups", {})
+            if group_id:
+                table = groups.get(str(group_id), {})
+                if not table:
+                    return (f"群 {group_id} 内没有用户级覆盖"
+                            f"（群主/管理员默认 admin，其他成员默认 member）")
+                lines = [f"🔐 群 {group_id} 内的权限覆盖（{len(table)}）"]
+                for uid in sorted(table, key=int):
+                    lines.append(f"  QQ {uid} → {table[uid]}")
+            else:
+                if not users and not groups:
+                    return ("当前没有用户级覆盖"
+                            "（群主/管理员默认 admin，其他成员默认 member）")
+                total = len(users) + sum(len(t) for t in groups.values())
+                lines = [f"🔐 用户权限覆盖（{total} 条）"]
+                if users:
+                    lines.append("  全局：")
+                    for uid in sorted(users, key=int):
+                        lines.append(f"    QQ {uid} → {users[uid]}")
+                for gid in sorted(groups, key=int):
+                    lines.append(f"  群 {gid}：")
+                    for uid in sorted(groups[gid], key=int):
+                        lines.append(f"    QQ {uid} → {groups[gid][uid]}")
+            lines.append("\n💡 /userperm set <QQ> <级别> [群号] · "
+                         "/userperm get <QQ> [--group=群号] · "
+                         "/userperm clear <QQ> [--group=群号]")
+            return "\n".join(lines)
+
+        def _userperm_get(uid: int, group_id: int) -> str:
+            perm = self._perm_manager
+            global_level = perm.user_level_override(uid)[0]
+            group_level = (perm.user_level_override(uid, group_id=group_id)[0]
+                           if group_id else "")
+            lines = [f"🔐 QQ {uid}"]
+            if perm.is_superuser(uid):
+                lines.append("  该用户是**超管**（config.json 的 superusers），"
+                             "不受用户级覆盖影响")
+                return "\n".join(lines)
+            lines.append(f"  当前生效：{_userperm_effective(uid, group_id)}")
+            lines.append(f"  全局覆盖：{global_level or '无'}")
+            if group_id:
+                lines.append(f"  群 {group_id} 覆盖：{group_level or '无'}")
+                role = perm.get_group_role(group_id, uid)
+                lines.append(f"  该群角色：{role}（群主/管理员默认 admin）")
+            lines.append(f"  可设置级别：{_userperm_levels()}（不含 superuser）")
+            return "\n".join(lines)
+
+        def _save_user_levels() -> bool:
+            if self._cfg_ref is None:
+                return False
+            data = self._perm_manager.export_user_levels()
+            if data:
+                self._cfg_ref.set("user_permissions", data)
+            else:
+                self._cfg_ref.delete("user_permissions")
+            return True
+
+        def _userperm_set(uid: int, level: str, group_id: int) -> str:
+            perm = self._perm_manager
+            if perm.is_superuser(uid):
+                return (f"QQ {uid} 是超管，无需也不允许用用户级覆盖"
+                        "（超管只能在 config.json 的 superusers 里配）")
+            level = level.strip().lower()
+            if level not in ASSIGNABLE_USER_LEVELS:
+                return (f"无效的级别：{level or '（空）'}\n"
+                        f"可用级别：{_userperm_levels()}"
+                        "（superuser 只能用 config.json 的 superusers）")
+            before = _userperm_effective(uid, group_id)
+            perm.set_user_level(uid, level, group_id=group_id or None)
+            saved = _save_user_levels()
+            tail = "" if saved else "（⚠️ 未持久化：配置未初始化，重启即失效）"
+            _cmd_logger().info("用户权限覆盖：QQ %s → %s（%s）",
+                               uid, level, _userperm_where(group_id))
+            return (f"✅ 已将 QQ {uid} 在{_userperm_where(group_id)}的权限设为 "
+                    f"{level}{tail}\n"
+                    f"  原来：{before}\n  现在：{_userperm_effective(uid, group_id)}")
+
+        def _userperm_clear(uid: int, group_id: int) -> str:
+            perm = self._perm_manager
+            existed = perm.clear_user_level(uid, group_id=group_id or None)
+            if not existed:
+                return (f"QQ {uid} 在{_userperm_where(group_id)}没有覆盖"
+                        "（本来就是按群角色/默认值算）")
+            saved = _save_user_levels()
+            tail = "" if saved else "（⚠️ 未持久化：配置未初始化）"
+            _cmd_logger().info("用户权限覆盖：清除 QQ %s（%s）",
+                               uid, _userperm_where(group_id))
+            return (f"✅ 已清除 QQ {uid} 在{_userperm_where(group_id)}的覆盖{tail}\n"
+                    f"  现在：{_userperm_effective(uid, group_id)}")
+
+        def _cmd_userperm(packet: CommandPacket):
+            """查看/修改**用户级**权限覆盖（superuser · 私聊）。"""
+            if self._perm_manager is None:
+                return "权限管理器未初始化"
+            # `--group=123` 被命令解析器收进了 kwargs（不进 args），两种写法都认：
+            # `/userperm set 10001 admin --group=123` 与 `/userperm set 10001 admin 123`
+            args = list(packet.args)
+            group_id = 0
+            raw_group = packet.kwargs.get("group") or packet.kwargs.get("gid") or ""
+            if raw_group:
+                try:
+                    group_id = _userperm_qq(raw_group)
+                except ValueError as exc:
+                    return str(exc)
+            kept: list[str] = []
+            for arg in args:
+                if arg.startswith("--group="):
+                    # 解析器只在「--k=v」且命令无 schema 时才收 kwargs；老版本/手搓
+                    # packet 仍可能把整串留在 args 里，兼容一下。
+                    try:
+                        group_id = _userperm_qq(arg.split("=", 1)[1])
+                    except ValueError as exc:
+                        return str(exc)
+                else:
+                    kept.append(arg)
+            verb = (kept[0].lower() if kept else "list")
+            rest = kept[1:]
+
+            if verb in ("", "list"):
+                if rest and not group_id:
+                    try:
+                        group_id = _userperm_qq(rest[-1])
+                    except ValueError as exc:
+                        return str(exc)
+                return _userperm_list(group_id or None)
+
+            if verb == "get":
+                if not rest:
+                    return "用法：/userperm get <QQ> [--group=群号]"
+                try:
+                    uid = _userperm_qq(rest[0])
+                except ValueError as exc:
+                    return str(exc)
+                return _userperm_get(uid, group_id)
+
+            if verb == "set":
+                if len(rest) < 2:
+                    return (f"用法：/userperm set <QQ> <级别> [群号]\n"
+                            f"可用级别：{_userperm_levels()}")
+                try:
+                    uid = _userperm_qq(rest[0])
+                except ValueError as exc:
+                    return str(exc)
+                level = rest[1]
+                if len(rest) >= 3 and not group_id:
+                    try:
+                        group_id = _userperm_qq(rest[2])
+                    except ValueError as exc:
+                        return str(exc)
+                return _userperm_set(uid, level, group_id)
+
+            if verb == "clear":
+                if not rest:
+                    return "用法：/userperm clear <QQ> [群号|--group=群号]"
+                try:
+                    uid = _userperm_qq(rest[0])
+                except ValueError as exc:
+                    return str(exc)
+                if len(rest) >= 2 and not group_id:
+                    try:
+                        group_id = _userperm_qq(rest[1])
+                    except ValueError as exc:
+                        return str(exc)
+                return _userperm_clear(uid, group_id)
+
+            return ("用法：\n"
+                    "  /userperm                       列出全部用户级覆盖\n"
+                    "  /userperm list [群号]           只看某个群\n"
+                    "  /userperm get <QQ> [--group=群号]   查看当前生效级别\n"
+                    "  /userperm set <QQ> <级别> [群号]    设覆盖（不给群号=全局）\n"
+                    "  /userperm clear <QQ> [群号]         清除覆盖\n"
+                    f"  可用级别：{_userperm_levels()}（不含 superuser）")
+
+        self._install_handler("userperm", CommandHandler(
+            "userperm", _cmd_userperm,
+            description="查看/设置用户权限（全局或指定群，superuser 专属）",
+            usage="userperm <list|get|set|clear> ...", scope="private",
             permission="superuser", permission_manager=self._perm_manager))
 
         # 所有人可见（查询/测试）
