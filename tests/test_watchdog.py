@@ -3138,6 +3138,59 @@ async def test_afterclass(tmp: Path):
     plugin.config.set("binding", {"groups": [], "users": []})
     plugin.config.set("afterclass", {"enabled": True})
 
+    # (f2) 活动刷新节奏：随机 10–60 分钟，**不跟着通知每轮跑**
+    import time as _time
+    from plugins.bupt_news.dekt import USER_AGENT
+
+    check("★ UA 锁死为微信客户端（MicroMessenger + miniProgram）",
+          "MicroMessenger" in USER_AGENT and "miniProgram" in USER_AGENT,
+          USER_AGENT[:60])
+    check("UA 不含自相矛盾的桌面平台串（Linux/Windows/Chrome）",
+          "X11" not in USER_AGENT and "Windows" not in USER_AGENT
+          and "Chrome/" not in USER_AGENT, USER_AGENT[:60])
+
+    plugin._act_bindings = []
+    check("没有绑定时不排活动刷新", plugin._activity_due() is False, "")
+
+    plugin._act_bindings = [make_binding("group", 111, _FakeDekt([]))]
+    plugin._store.meta_set("acts_next_at", 0)
+    check("★ 首次（没有下次时间）立刻可以刷", plugin._activity_due() is True, "")
+
+    plugin.config.set("afterclass", {"enabled": True,
+                                     "interval_min": 600, "interval_max": 3600})
+    now = _time.time()
+    nxt = plugin._schedule_next_activity(now)
+    check("★ 下次刷新落在 10–60 分钟内",
+          600 <= nxt - now <= 3600, f"{nxt - now:.0f}s")
+    check("★ 刷新后同轮不再重复刷", plugin._activity_due(now + 1) is False, "")
+
+    # 抖动：多次取样不应恒定（随机而不是固定周期）
+    samples = {round(plugin._schedule_next_activity(now) - now) for _ in range(6)}
+    check("刷新间隔是随机的（不是固定周期）", len(samples) > 1, str(sorted(samples)))
+
+    # 边界：min == max 时退化成固定值
+    plugin.config.set("afterclass", {"enabled": True,
+                                     "interval_min": 60, "interval_max": 60})
+    check("min=max 时退化为固定间隔",
+          round(plugin._schedule_next_activity(now) - now) == 60, "")
+
+    # 落盘：热重载/重启后不该立刻又刷一遍
+    plugin.config.set("afterclass", {"enabled": True,
+                                     "interval_min": 600, "interval_max": 3600})
+    plugin._schedule_next_activity(now)
+    saved = plugin._store.meta_get("acts_next_at")
+    # 直接重开**同一个 state.json**：插件热重载/重启后读的就是它
+    from plugins.bupt_news.store import StateStore
+    again_store = StateStore(plugin._store.state_path, plugin._store.notices_path)
+    check("★ 下次刷新时间跨实例保持（重载后不立刻重刷）",
+          abs(float(again_store.meta_get("acts_next_at")) - float(saved)) < 1e-6,
+          str(again_store.meta_get("acts_next_at")))
+    plugin._store = again_store          # 换成"重载后"的实例继续断言
+    check("重载后同样判为「还没到点」", plugin._activity_due(now + 1) is False, "")
+    check("状态行显示下次刷新时间",
+          "下次刷新" in plugin._afterclass_status_line(),
+          plugin._afterclass_status_line())
+
     # 没有绑定 / 关闭时的状态行
     plugin._act_bindings = []
     check("没有绑定时状态行给出提示",
