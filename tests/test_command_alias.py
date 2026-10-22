@@ -108,9 +108,16 @@ async def test_lifecycle_and_validation():
     text = await ask(cmds, "/alias add okay nope")
     check("目标不存在被拒", "未知命令" in text, text[:160])
     text = await ask(cmds, "/alias add g grp")
-    check("命令组本体不能起别名", "命令组" in text, text[:160])
+    check("命令组可以起别名", "已给 /grp" in text, text[:160])
+    check("组别名裸调 → 命令组帮助页",
+          (await ask(cmds, "/g")).startswith("📖 /grp"), (await ask(cmds, "/g"))[:80])
+    check("组别名 + 子命令照常路由", await ask(cmds, "/g sub") == "sub-ok")
+    check("组别名写进配置", cfg.get("command_aliases.grp") == ["g"],
+          str(cfg.get("command_aliases")))
+    check("/help 组别名解析到命令组", "演示" in await ask(cmds, "/help g")
+          or "grp" in await ask(cmds, "/help g"))
     text = await ask(cmds, "/alias add s grp.sub")
-    check("子命令暂不支持别名并说明", "子命令" in text, text[:160])
+    check("子命令仍不支持别名并说明", "子命令" in text, text[:160])
     text = await ask(cmds, "/alias add a" + "x" * 70 + " demo")
     check("别名过长被拒", "过长" in text, text[:160])
 
@@ -165,6 +172,18 @@ async def test_persistence_and_reregister():
     cmds.unregister("demo")
     check("注销命令连带删掉别名条目",
           cmds.list_commands().get("d1") is None, str(list(cmds.list_commands())))
+
+    # 命令组别名：注销（连带清别名条目）→ 重新注册 → 配置重放
+    await ask(cmds, "/alias add g grp")
+    cmds.unregister("grp")
+    check("注销命令组连带删掉组别名", "g" not in cmds.list_commands(),
+          str(list(cmds.list_commands())))
+    register_demo(cmds)
+    check("重新注册后组别名恢复", (await ask(cmds, "/g")).startswith("📖 /grp"))
+    check("恢复后的组别名可路由子命令", await ask(cmds, "/g sub") == "sub-ok")
+    text = await ask(cmds, "/alias del g")
+    check("删除组别名", "已删除" in text, text[:120])
+    check("删除后组别名失效", await ask(cmds, "/g") == "_not_found")
     register_demo(cmds)
     check("重新注册后别名自动恢复（配置接管）",
           await ask(cmds, "/d1") == "demo-ok" and await ask(cmds, "/d2") == "demo-ok")
@@ -172,7 +191,9 @@ async def test_persistence_and_reregister():
     # 新管理器（模拟重启）从 config.json 恢复
     cmds2 = CommandManager(prefixes=["/"], perm_manager=PermissionManager(superusers=[SUPER]),
                            cfg_ref=ConfigManager(str(cfg_path)))
-    check("重启后别名表已载入", cmds2.alias_overrides() == {"demo": ["d1", "d2"]},
+    # grp: [] 是「组别名已清空」的显式记录（配置接管该命令的别名全集）
+    check("重启后别名表已载入",
+          cmds2.alias_overrides() == {"demo": ["d1", "d2"], "grp": []},
           str(cmds2.alias_overrides()))
     register_demo(cmds2)
     check("重启后别名可执行", await ask(cmds2, "/d1") == "demo-ok")

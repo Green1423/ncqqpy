@@ -809,7 +809,7 @@ class _AliasListSchema(CommandSchema):
 class _AliasAddSchema(CommandSchema):
     alias = StrField(required=True,
                      description="新别名（字母开头，字母/数字/_/-）")
-    command = StrField(required=True, description="目标命令（顶层命令）")
+    command = StrField(required=True, description="目标命令或命令组")
 
 
 class _AliasDelSchema(CommandSchema):
@@ -817,13 +817,13 @@ class _AliasDelSchema(CommandSchema):
 
 
 class _AliasSetSchema(CommandSchema):
-    command = StrField(required=True, description="目标命令")
+    command = StrField(required=True, description="目标命令或命令组")
     aliases = VariadicField(description="别名列表（空格或逗号分隔）；不给 = 清空")
 
 
 class _AliasMoveSchema(CommandSchema):
     alias = StrField(required=True, description="要改指向的别名")
-    command = StrField(required=True, description="新的目标命令")
+    command = StrField(required=True, description="新的目标命令或命令组")
 
 
 class _EventTargetSchema(CommandSchema):
@@ -1201,7 +1201,7 @@ class CommandManager:
         return ""
 
     def _resolve_alias_target(self, raw: str) -> tuple[str, "CommandHandler"] | tuple[None, str]:
-        """解析别名要指向的命令；失败返回 `(None, 原因)`。"""
+        """解析别名要指向的命令 / 命令组；失败返回 `(None, 原因)`。"""
         target = (raw or "").strip().lstrip("/")
         if not target:
             return None, "缺少目标命令"
@@ -1213,8 +1213,11 @@ class CommandManager:
             return None, (f"/{canonical} 是子命令；别名只支持顶层命令"
                           "（可给父命令起别名，或用 /help 查子命令）")
         if handler.subcommands:
-            return None, (f"/{canonical} 是命令组，本体不执行动作；"
-                          "请给具体子命令起别名（暂不支持）或用它自己的子命令")
+            # 命令组**可以**起别名：别名在 `_commands` 里指向同一个父 handler，
+            # `/别名 子命令` 照常路由到子命令，`/别名` 照常显示命令组帮助页。
+            # （子命令 `父.子` 本身暂不支持别名 —— 那需要另一套“别名→子命令”的
+            # 归属与回收规则，等有真实需求再做。）
+            return canonical, handler
         return canonical, handler
 
     def alias_overrides(self) -> dict[str, list[str]]:
