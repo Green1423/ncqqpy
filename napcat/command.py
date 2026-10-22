@@ -444,6 +444,20 @@ def normalize_text(text: str) -> str:
     return CommandParser().normalize(text)
 
 
+#: 命令名 / 子命令名 / 别名的唯一规则：**Unicode 字母开头**，后续是字母、数字、
+#: 下划线或连字符。用 `[^\W\d_]` 而不是 `[A-Za-z]` —— 中文、日文、西里尔字母都是
+#: 字母，`/签到`、别名 `/签` 因此可用；而 `//`、`/签到！`、`/2签到` 这类「前缀后
+#: 不是名字」的输入仍被挡住（`\w` 不匹配标点）。
+_COMMAND_NAME_RE = re.compile(r"[^\W\d_][\w-]*")
+
+
+def valid_command_name(name: str, max_len: int = 64) -> bool:
+    """名字是否合法（命令名、子命令名、别名共用这一条规则）。"""
+    name = (name or "").strip()
+    return bool(name) and len(name) <= max_len and bool(
+        _COMMAND_NAME_RE.fullmatch(name))
+
+
 class CommandParser:
     """命令解析器 — 分词、前缀匹配、参数分离"""
 
@@ -455,7 +469,7 @@ class CommandParser:
     _AT_PATTERN = re.compile(r'^\[@\d+\]\s*|^\[@all\]\s*')
     # 合法命令名：字母开头，跟字母/数字/下划线/连字符。用来把「前缀后跟分隔符」
     # 的输入（`//`、`/ /`）判成非法而不是一个叫 `/` 的命令。
-    _NAME_PATTERN = re.compile(r'[a-zA-Z][\w-]*')
+    _NAME_PATTERN = _COMMAND_NAME_RE
     _CJK_QUOTES = {
         "“": "\"", "”": "\"",
         "‘": "'", "’": "'",
@@ -595,8 +609,9 @@ class CommandParser:
                                  illegal_reason="命令名不是合法标识符")
         subcommand = None
         idx = 1
-        # 仅当第二个 token 是纯字母数字标识符时才视为子命令
-        if len(parts) > 1 and re.fullmatch(r"[a-zA-Z_]\w*", parts[1]):
+        # 仅当第二个 token 是合法名字时才视为子命令（与命令名同一规则，
+        # 所以中文子命令 `/点歌 列表` 也能路由）
+        if len(parts) > 1 and valid_command_name(parts[1], self.max_cmd_len):
             subcommand = parts[1].lower()
             idx = 2
         args = []
@@ -1180,8 +1195,9 @@ class CommandManager:
             return "别名不能为空"
         if len(alias) > max_len:
             return f"别名过长（最多 {max_len} 字符）"
-        if not re.fullmatch(r"[A-Za-z][\w-]*", alias):
-            return f"别名 {alias!r} 非法：字母开头，只能含字母/数字/下划线/连字符"
+        if not valid_command_name(alias, max_len):
+            return (f"别名 {alias!r} 非法：字母开头（支持中文），"
+                    "只能含字母/数字/下划线/连字符")
         return ""
 
     def _resolve_alias_target(self, raw: str) -> tuple[str, "CommandHandler"] | tuple[None, str]:
@@ -2141,6 +2157,12 @@ class CommandManager:
             # 入口（/help、/perm）也就无从对准。宁可加载期显式报错。
             raise ValueError(
                 f"命令名 {name!r} 层级超过两级：子命令只支持 `父.子` 形式")
+        for _part in name.split("."):
+            if not valid_command_name(_part, self.parser.max_cmd_len):
+                # 注册进来却解析不到 = 命令永远收不到消息（也无从 /help 查到）。
+                raise ValueError(
+                    f"命令名 {name!r} 非法（{_part!r}）：字母开头（支持中文），"
+                    "只能含字母/数字/下划线/连字符")
         # permission/scope 用 None 表示"未指定"，这样子命令才能按文档所述
         # 「继承父命令的 scope 和 permission 作为默认值」；显式传入（含空串 /
         # "all"）则视为对该子命令的覆盖。
