@@ -3270,7 +3270,7 @@ async def test_targets_commands(tmp: Path):
     spec = plugin._targets()["users"].get(100000666) or {}
     check("add 能一次给两个开关", spec.get("event") is True
           and spec.get("message") is False, str(spec))
-    _, bad = await say("/buptnews add user 100000777 event=看情况")
+    bad = await say("/buptnews add user 100000777 event=看情况")
     check("非法的开关值有明确提示", "认不出" in bad, bad[:80])
 
     # (b) set：只改给了的开关
@@ -3313,11 +3313,77 @@ async def test_targets_commands(tmp: Path):
     api.roles[(100000777, 100000666)] = "admin"
     out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000666)
     check("★ 群管理员 → 允许", "已保存" in out, out[:70])
+    # 一个群只能一个人设置：群主也不能直接覆盖别人的
     api.roles[(100000777, 100000888)] = "owner"
     out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000888)
-    check("★ 群主 → 允许", "已保存" in out, out[:70])
+    check("★ 已有人设置时，群主也不能直接覆盖",
+          "一个群只能有一个人设置" in out, out[:80])
+    out = await say("/buptnews dektoken group 100000777 delete", 100000888)
+    check("★ 群主可以删除当前 token（并说明原设置者）",
+          "已删除" in out and "100000666" in out, out[:90])
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000888)
+    check("★ 删除后群主可以设置", "已保存" in out, out[:70])
+    # 原作者可以重设（续期），不需要先删
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000888)
+    check("★ 设置者本人可重设（续期不用先删）", "已保存" in out, out[:70])
     out = await say(f"/buptnews dektoken group 100000777 {jwt(1)} 多了一个参数", 100000888)
     check("group 形态参数多了会报用法", "用法" in out, out[:60])
+
+    # 过期通知：私聊提醒**设置它的人**
+    data = plugin._targets()
+    data["groups"][100000777]["token_by"] = 100000888
+    plugin._save_targets(data)
+    plugin._refresh_activity_bindings()
+
+    class _Expired:
+        available = True
+
+        def reload_token(self):
+            return False
+
+        def expiry(self):
+            from datetime import datetime, timedelta
+            return datetime.now() - timedelta(minutes=5)
+
+        async def me(self):
+            raise DektAuthError("expired")
+
+        async def activity_classes(self):
+            return []
+
+    plugin._act_bindings[0]["client"] = _Expired() \
+        if plugin._act_bindings else None
+    if not plugin._act_bindings:
+        plugin._act_bindings = [{"name": "群100000777", "kind": "group",
+                                 "target": 100000777, "token_file": "x",
+                                 "client": _Expired(),
+                                 "store": plugin._act_bindings and None}]
+    sent = []
+
+    class _NotifyApi(_Api):
+        async def send_private_msg(self, uid, chain, group_id=None):
+            sent.append((str(uid), "".join(
+                s.get("data", {}).get("text", "") for s in chain.build())))
+            return {}
+
+    plugin.api = _NotifyApi()
+    plugin._token_warn_dates = {}
+    await plugin._warn_token_expiry()
+    check("★ 过期时私聊通知设置者",
+          any(uid == "100000888" and "过期" in text for uid, text in sent),
+          str(sent)[:120])
+    # 历史 token（没记设置者）→ 退给超管，不能没人管
+    data = plugin._targets()
+    data["groups"][100000777]["token_by"] = 0
+    plugin._save_targets(data)
+    plugin._token_warn_dates = {}
+    sent.clear()
+    await plugin._warn_token_expiry()
+    check("★ 没记设置者时通知超管（兜底）",
+          any(uid == "1" and "过期" in text for uid, text in sent), str(sent)[:120])
+    sent.clear()
+    await plugin._warn_token_expiry()          # 不能清 _token_warn_dates
+    check("同一天不重复提醒（避免刷屏）", sent == [], str(sent))
 
     # token 文件落在数据目录且权限收紧
     tokens = sorted(Path(data_dir, "dekt-tokens").glob("*.txt"))
@@ -3347,10 +3413,10 @@ async def test_targets_commands(tmp: Path):
     out = await say("/buptnews add user 100000999", 100000555)
     check("★ 非超管不能 add",
           100000999 not in plugin._targets()["users"]
-          and isinstance(out, tuple), repr(out)[:60])
+          and "_not_found" in out, repr(out)[:60])
     out = await say("/buptnews dektoken user " + jwt(100000555), 100000555)
     check("★ dektoken 不因非超管而被拦（命令内部判定）",
-          not isinstance(out, tuple), repr(out)[:60])
+          "_not_found" not in out and "已保存" in out, repr(out)[:60])
 
 
 async def _cleanup_artifacts():
