@@ -35,7 +35,7 @@ FAILED = 0
 
 GROUP = 100000002
 OTHER_GROUP = 100000003
-SUPER = 999
+SUPER = 10000009
 ALICE = 10001
 BOB = 10002
 
@@ -190,9 +190,12 @@ async def test_command(tmp: Path):
     check("重复清除有提示", "没有覆盖" in text, text[:120])
 
     text = await ask(cmds, f"/userperm set {ALICE} god")
-    check("非法级别有提示", "可用级别" in text, text[:160])
+    check("非法级别 → 用法不正确 + 重定向（列出可选级别）",
+          "用法不正确" in text and "owner" in text and "/userperm set" in text,
+          text[:200])
     text = await ask(cmds, "/userperm set abc admin")
-    check("非法 QQ 有提示", "非法 QQ" in text, text[:120])
+    check("非法 QQ → 用法不正确 + 重定向",
+          "用法不正确" in text and "/userperm set" in text, text[:200])
     text = await ask(cmds, f"/userperm set {SUPER} member")
     check("不能覆盖超管", "超管" in text, text[:160])
 

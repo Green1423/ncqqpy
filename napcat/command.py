@@ -743,6 +743,86 @@ def requirement_tag(permission: str, scope: str) -> str:
     return f" [{describe_requirements(permission, scope)}]"
 
 
+# ==================== 系统命令的 Schema ====================
+#
+# 系统命令组（/perm、/userperm、/alias、/stop、/pause）里凡是**带参数**的子命令，
+# 一律声明 Schema，而不是手写 usage 字符串：
+#   · 帮助里的「位置传参 / 键值传参 / 参数表」由 Schema 生成（不会和校验漂移）；
+#   · 参数缺失/类型不对时，框架统一回「⚠️ 用法不正确 + /help <组> <子命令>」，
+#     不用每个 handler 自己写 usage 兜底。
+
+class _PermTargetSchema(CommandSchema):
+    target = StrField(required=True, description="命令名（支持 `父.子` 与别名）")
+
+
+class _PermSetSchema(CommandSchema):
+    target = StrField(required=True, description="命令名（支持 `父.子` 与别名）")
+    permission = StrField(
+        required=True,
+        description="权限节点：superuser / owner / admin / member / public / 自定义节点")
+
+
+class _PermResetSchema(CommandSchema):
+    target = StrField(required=True, description="命令名，或 all（清空全部覆盖）")
+
+
+class _UserpermScopeSchema(CommandSchema):
+    group = IntField(min=1, default=0, description="群号；0/不给 = 全局")
+
+
+class _UserpermGetSchema(CommandSchema):
+    user = QQField(min=1, required=True, description="目标 QQ")
+    group = IntField(min=1, default=0, description="群号；0/不给 = 全局")
+
+
+class _UserpermSetSchema(CommandSchema):
+    user = QQField(min=1, required=True, description="目标 QQ")
+    level = ChoiceField(list(ASSIGNABLE_USER_LEVELS), required=True,
+                        description="权限级别：owner / admin / member / everyone")
+    group = IntField(min=1, default=0, description="群号；0/不给 = 全局")
+
+
+class _UserpermClearSchema(CommandSchema):
+    user = QQField(min=1, required=True, description="目标 QQ")
+    group = IntField(min=1, default=0, description="群号；0/不给 = 全局")
+
+
+class _AliasListSchema(CommandSchema):
+    command = StrField(description="只看这条命令的别名")
+
+
+class _AliasAddSchema(CommandSchema):
+    alias = StrField(required=True,
+                     description="新别名（字母开头，字母/数字/_/-）")
+    command = StrField(required=True, description="目标命令（顶层命令）")
+
+
+class _AliasDelSchema(CommandSchema):
+    alias = StrField(required=True, description="要删除的别名")
+
+
+class _AliasSetSchema(CommandSchema):
+    command = StrField(required=True, description="目标命令")
+    aliases = VariadicField(description="别名列表（空格或逗号分隔）；不给 = 清空")
+
+
+class _AliasMoveSchema(CommandSchema):
+    alias = StrField(required=True, description="要改指向的别名")
+    command = StrField(required=True, description="新的目标命令")
+
+
+class _EventTargetSchema(CommandSchema):
+    target = StrField(required=True, description="事件监听器 hid")
+
+
+class _CommandTargetSchema(CommandSchema):
+    target = StrField(required=True, description="命令名")
+
+
+class _TimerTargetSchema(CommandSchema):
+    target = StrField(required=True, description="定时任务名")
+
+
 class CommandHandler:
     """单个命令处理器"""
 
@@ -1594,19 +1674,13 @@ class CommandManager:
 
 
         # ---- /stop：命令组（event / command / timer）----
-        def _cmd_stop_event(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法: /stop event <hid>"
+        def _cmd_stop_event(packet: CommandPacket, target: str):
             eb = self._event_bus_ref
             if eb and eb.stop(target):
                 return f"事件监听器 {target} 已移除"
             return f"未找到事件监听器: {target}"
 
-        def _cmd_stop_command(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法: /stop command <命令名>"
+        def _cmd_stop_command(packet: CommandPacket, target: str):
             removed = self._commands.pop(target, None)
             if removed is not None:
                 # 别名与命令共用 handler：不一起删会留下「命令没了但别名还能用」
@@ -1614,10 +1688,7 @@ class CommandManager:
                 return f"命令 /{target} 已移除"
             return f"未找到命令: /{target}"
 
-        def _cmd_stop_timer(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法: /stop timer <名字>"
+        def _cmd_stop_timer(packet: CommandPacket, target: str):
             tm = self._timer_ref
             if tm:
                 tm.cancel(target)
@@ -1625,10 +1696,7 @@ class CommandManager:
             return "定时器未初始化"
 
         # ---- /pause：命令组（event / command / timer）----
-        def _cmd_pause_event(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法: /pause event <hid>"
+        def _cmd_pause_event(packet: CommandPacket, target: str):
             eb = self._event_bus_ref
             if eb is None:
                 return "事件总线未初始化"
@@ -1642,20 +1710,14 @@ class CommandManager:
             eb.pause(target)
             return f"事件监听器 {target} 已暂停"
 
-        def _cmd_pause_command(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法: /pause command <命令名>"
+        def _cmd_pause_command(packet: CommandPacket, target: str):
             h = self._commands.get(target)
             if h is None:
                 return f"未找到命令: /{target}"
             h.disabled = not h.disabled
             return f"命令 /{target} 已{'禁用' if h.disabled else '启用'}"
 
-        def _cmd_pause_timer(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法: /pause timer <名字>"
+        def _cmd_pause_timer(packet: CommandPacket, target: str):
             tm = self._timer_ref
             if tm is None:
                 return "定时器未初始化"
@@ -1763,22 +1825,13 @@ class CommandManager:
         def _sub_perm_list(packet: CommandPacket = None):
             return _perm_list()
 
-        def _sub_perm_get(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法：/perm get <命令>"
+        def _sub_perm_get(packet: CommandPacket, target: str):
             return _perm_get(target)
 
-        def _sub_perm_set(packet: CommandPacket):
-            if not packet.arg(0, "") or len(packet.args) < 2:
-                return ("用法：/perm set <命令> <权限>\n"
-                        f"可用值：{self.perm_node_choices()}")
-            return _perm_set(packet.arg(0), packet.arg(1))
+        def _sub_perm_set(packet: CommandPacket, target: str, permission: str):
+            return _perm_set(target, permission)
 
-        def _sub_perm_reset(packet: CommandPacket):
-            target = packet.arg(0, "")
-            if not target:
-                return "用法：/perm reset <命令|all>"
+        def _sub_perm_reset(packet: CommandPacket, target: str):
             return _perm_reset(target)
 
         # ---- /userperm：用户级权限覆盖（superuser · 私聊）----
@@ -1907,91 +1960,26 @@ class CommandManager:
             return (f"✅ 已清除 QQ {uid} 在{_userperm_where(group_id)}的覆盖{tail}\n"
                     f"  现在：{_userperm_effective(uid, group_id)}")
 
-        def _userperm_args(packet: CommandPacket):
-            """解析公共的 `--group=` / 位置群号。返回 `(group_id, 位置参数, 错误)`。"""
-            group_id = 0
-            raw_group = packet.kwargs.get("group") or packet.kwargs.get("gid") or ""
-            if raw_group:
-                try:
-                    group_id = _userperm_qq(raw_group)
-                except ValueError as exc:
-                    return 0, [], str(exc)
-            kept: list[str] = []
-            for arg in packet.args:
-                if arg.startswith("--group="):
-                    try:
-                        group_id = _userperm_qq(arg.split("=", 1)[1])
-                    except ValueError as exc:
-                        return 0, [], str(exc)
-                else:
-                    kept.append(arg)
-            return group_id, kept, ""
-
-        def _sub_userperm_list(packet: CommandPacket):
+        def _sub_userperm_list(packet: CommandPacket, group: int = 0):
             if self._perm_manager is None:
                 return "权限管理器未初始化"
-            group_id, kept, error = _userperm_args(packet)
-            if error:
-                return error
-            if kept and not group_id:
-                try:
-                    group_id = _userperm_qq(kept[0])
-                except ValueError as exc:
-                    return str(exc)
-            return _userperm_list(group_id or None)
+            return _userperm_list(group or None)
 
-        def _sub_userperm_get(packet: CommandPacket):
+        def _sub_userperm_get(packet: CommandPacket, user: int, group: int = 0):
             if self._perm_manager is None:
                 return "权限管理器未初始化"
-            group_id, kept, error = _userperm_args(packet)
-            if error:
-                return error
-            if not kept:
-                return "用法：/userperm get <QQ> [--group=群号]"
-            try:
-                uid = _userperm_qq(kept[0])
-            except ValueError as exc:
-                return str(exc)
-            return _userperm_get(uid, group_id)
+            return _userperm_get(user, group or 0)
 
-        def _sub_userperm_set(packet: CommandPacket):
+        def _sub_userperm_set(packet: CommandPacket, user: int, level: str,
+                              group: int = 0):
             if self._perm_manager is None:
                 return "权限管理器未初始化"
-            group_id, kept, error = _userperm_args(packet)
-            if error:
-                return error
-            if len(kept) < 2:
-                return (f"用法：/userperm set <QQ> <级别> [群号]\n"
-                        f"可用级别：{_userperm_levels()}")
-            try:
-                uid = _userperm_qq(kept[0])
-            except ValueError as exc:
-                return str(exc)
-            if len(kept) >= 3 and not group_id:
-                try:
-                    group_id = _userperm_qq(kept[2])
-                except ValueError as exc:
-                    return str(exc)
-            return _userperm_set(uid, kept[1], group_id)
+            return _userperm_set(user, level, group or 0)
 
-        def _sub_userperm_clear(packet: CommandPacket):
+        def _sub_userperm_clear(packet: CommandPacket, user: int, group: int = 0):
             if self._perm_manager is None:
                 return "权限管理器未初始化"
-            group_id, kept, error = _userperm_args(packet)
-            if error:
-                return error
-            if not kept:
-                return "用法：/userperm clear <QQ> [群号|--group=群号]"
-            try:
-                uid = _userperm_qq(kept[0])
-            except ValueError as exc:
-                return str(exc)
-            if len(kept) >= 2 and not group_id:
-                try:
-                    group_id = _userperm_qq(kept[1])
-                except ValueError as exc:
-                    return str(exc)
-            return _userperm_clear(uid, group_id)
+            return _userperm_clear(user, group or 0)
 
         # ---- /alias：命令别名（superuser · 私聊）----
         #
@@ -2036,51 +2024,47 @@ class CommandManager:
                          "set <命令> [别名…] · move <别名> <命令>")
             return "\n".join(lines)
 
-        def _sub_alias_list(packet: CommandPacket):
-            return _alias_list(packet.arg(0, "").lstrip("/"))
+        def _sub_alias_list(packet: CommandPacket, command: str = None):
+            return _alias_list((command or "").lstrip("/"))
 
-        def _sub_alias_add(packet: CommandPacket):
-            if len(packet.args) < 2:
-                return "用法：/alias add <别名> <命令>"
-            return self.add_alias(packet.arg(0, ""), packet.arg(1, ""))[1]
+        def _sub_alias_add(packet: CommandPacket, alias: str, command: str):
+            return self.add_alias(alias, command)[1]
 
-        def _sub_alias_del(packet: CommandPacket):
-            if not packet.arg(0, ""):
-                return "用法：/alias del <别名>"
-            return self.remove_alias(packet.arg(0, ""))[1]
+        def _sub_alias_del(packet: CommandPacket, alias: str):
+            return self.remove_alias(alias)[1]
 
-        def _sub_alias_set(packet: CommandPacket):
-            if not packet.arg(0, ""):
-                return ("用法：/alias set <命令> [别名…]\n"
-                        "（不给别名 = 清空该命令的全部别名）")
-            names = [part.strip() for arg in packet.args[1:]
+        def _sub_alias_set(packet: CommandPacket, command: str,
+                           aliases: list[str] = None):
+            names = [part.strip() for arg in (aliases or [])
                      for part in arg.split(",") if part.strip()]
-            return self.set_aliases(packet.arg(0, ""), names)[1]
+            return self.set_aliases(command, names)[1]
 
-        def _sub_alias_move(packet: CommandPacket):
-            if len(packet.args) < 2:
-                return "用法：/alias move <别名> <新命令>"
-            return self.move_alias(packet.arg(0, ""), packet.arg(1, ""))[1]
+        def _sub_alias_move(packet: CommandPacket, alias: str, command: str):
+            return self.move_alias(alias, command)[1]
 
         def _register_group(parent: str, description: str,
-                            subs: list[tuple[str, Callable, str, str]]) -> None:
+                            subs: list[tuple[str, Callable, str, type]]) -> None:
             """把系统命令注册成**真正的命令组**（子命令各有帮助/权限/作用域）。
 
             这些命令（/perm、/stop、/pause、/userperm、/alias）第一个位置参数
             本来就是「动作」，但以前注册成「无子命令的命令」：`/help perm` 只有一行
             usage、`/help perm get` 查不到、裸调父命令也不会走命令组帮助页。
-            现在每个动作是独立子命令，裸调父命令由框架重定向到 `/help <父>`。
+            现在每个动作是独立子命令；**带参数的子命令声明 Schema**，帮助里的
+            参数表由 Schema 生成，缺参时框架自动重定向到
+            `/help <父> <子命令>`。
             """
             def _parent_body(packet: CommandPacket = None):
-                verbs = "|".join(child for child, _f, _d, _u in subs)
+                verbs = "|".join(child for child, _f, _d, _s in subs)
                 return (f"用法：/{parent} <{verbs}> …\n"
                         f"发 /help {parent} 查看各子命令的用法与权限")
 
             head = CommandHandler(parent, _parent_body, description=description,
                                   scope="private", permission="superuser",
                                   permission_manager=self._perm_manager)
-            for child, func, desc, usage in subs:
-                sub = CommandHandler(child, func, description=desc, usage=usage,
+            for child, func, desc, schema in subs:
+                # 参数文档一律由 Schema 生成；有参数的子命令缺参时框架自动
+                # 「⚠️ 用法不正确 + /help <父> <子命令>」，不再手写 usage 兜底。
+                sub = CommandHandler(child, func, description=desc, schema=schema,
                                      scope="private", permission="superuser",
                                      permission_manager=self._perm_manager)
                 sub.parent_name = parent
@@ -2104,41 +2088,38 @@ class CommandManager:
                 permission="superuser",
                 permission_manager=self._perm_manager))
 
-        # ---- 系统命令组：动作是子命令，不是「位置参数动词」----
+        # ---- 系统命令组：动作是子命令，参数文档来自 Schema ----
         _register_group("stop", "移除监听器/命令/定时任务", [
-            ("event", _cmd_stop_event, "移除事件监听器（按 hid）", "event <hid>"),
-            ("command", _cmd_stop_command, "移除命令（含别名）", "command <命令名>"),
-            ("timer", _cmd_stop_timer, "取消定时任务", "timer <名字>"),
+            ("event", _cmd_stop_event, "移除事件监听器（按 hid）", _EventTargetSchema),
+            ("command", _cmd_stop_command, "移除命令（含别名）", _CommandTargetSchema),
+            ("timer", _cmd_stop_timer, "取消定时任务", _TimerTargetSchema),
         ])
         _register_group("pause", "暂停/恢复监听器/命令/定时任务", [
-            ("event", _cmd_pause_event, "暂停/恢复事件监听器", "event <hid>"),
-            ("command", _cmd_pause_command, "启用/禁用命令", "command <命令名>"),
-            ("timer", _cmd_pause_timer, "暂停/恢复定时任务", "timer <名字>"),
+            ("event", _cmd_pause_event, "暂停/恢复事件监听器", _EventTargetSchema),
+            ("command", _cmd_pause_command, "启用/禁用命令", _CommandTargetSchema),
+            ("timer", _cmd_pause_timer, "暂停/恢复定时任务", _TimerTargetSchema),
         ])
         _register_group("perm", "查看/设置命令权限覆盖", [
-            ("list", _sub_perm_list, "列出全部权限覆盖", "list"),
-            ("get", _sub_perm_get, "查看某条命令的权限", "get <命令>"),
-            ("set", _sub_perm_set, "设置覆盖", "set <命令> <权限>"),
-            ("reset", _sub_perm_reset, "恢复声明值 / 清空全部", "reset <命令|all>"),
+            ("list", _sub_perm_list, "列出全部权限覆盖", None),
+            ("get", _sub_perm_get, "查看某条命令的权限", _PermTargetSchema),
+            ("set", _sub_perm_set, "设置覆盖", _PermSetSchema),
+            ("reset", _sub_perm_reset, "恢复声明值 / 清空全部", _PermResetSchema),
         ])
         _register_group("userperm", "查看/设置用户权限（全局或指定群）", [
             ("list", _sub_userperm_list, "列出用户级覆盖（可指定群）",
-             "list [群号]"),
+             _UserpermScopeSchema),
             ("get", _sub_userperm_get, "查看某人当前生效级别与来源",
-             "get <QQ> [--group=群号]"),
+             _UserpermGetSchema),
             ("set", _sub_userperm_set, "设置覆盖（不给群号=全局）",
-             "set <QQ> <级别> [群号]"),
-            ("clear", _sub_userperm_clear, "清除覆盖",
-             "clear <QQ> [群号|--group=群号]"),
+             _UserpermSetSchema),
+            ("clear", _sub_userperm_clear, "清除覆盖", _UserpermClearSchema),
         ])
         _register_group("alias", "查看/增删改命令别名", [
-            ("list", _sub_alias_list, "列出全部别名（可指定命令）", "list [命令]"),
-            ("add", _sub_alias_add, "新增别名", "add <别名> <命令>"),
-            ("del", _sub_alias_del, "删除别名", "del <别名>"),
-            ("set", _sub_alias_set, "整体替换（不给别名=清空）",
-             "set <命令> [别名…]"),
-            ("move", _sub_alias_move, "把别名改指向另一条命令",
-             "move <别名> <新命令>"),
+            ("list", _sub_alias_list, "列出全部别名（可指定命令）", _AliasListSchema),
+            ("add", _sub_alias_add, "新增别名", _AliasAddSchema),
+            ("del", _sub_alias_del, "删除别名", _AliasDelSchema),
+            ("set", _sub_alias_set, "整体替换（不给别名=清空）", _AliasSetSchema),
+            ("move", _sub_alias_move, "把别名改指向另一条命令", _AliasMoveSchema),
         ])
 
         # 所有人可见（查询/测试）

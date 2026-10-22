@@ -148,7 +148,8 @@ async def main() -> int:
     check("未注册节点当场拒绝", "无效的权限值" in txt and "superuser" in txt, txt[:120])
     check("拒绝后不写盘", table() == {"plain": "member"}, str(table()))
     _, txt = await dispatch("/perm set plain")
-    check("缺值 → 用法提示", "用法：/perm set" in txt, txt[:80])
+    check("缺值 → 用法不正确 + 自动重定向到 /help perm set",
+          "用法不正确" in txt and "/perm set" in txt and "permission" in txt, txt[:120])
     _, txt = await dispatch("/perm set nosuchcmd admin")
     check("未知命令", "未知命令" in txt, txt[:80])
 

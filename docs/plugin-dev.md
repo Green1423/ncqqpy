@@ -474,6 +474,11 @@ from napcat.command import build_usage
 usage = build_usage("ban", BanSchema)   # → "ban <user_id> [duration=600] [reason]"
 ```
 
+**子命令带参数时也要声明 Schema**（框架的系统命令组就是这么做的）：各子命令单独
+`register_command("demo.sub", schema=SubSchema)`，帮助里的用法/参数表由 Schema 生成；
+参数缺失或取值非法时框架自动回 `⚠️ 用法不正确 + /help demo.sub`。不要在每个
+handler 里手写「用法：…」兜底 —— 那会和 Schema 漂移。
+
 ### 4.3.2 命令函数的签名（无 schema 时只有一个 `packet`）
 
 框架按**参数名**注入，认不出的名字会被丢掉：
