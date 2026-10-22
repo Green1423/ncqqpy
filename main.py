@@ -4,7 +4,7 @@ ncqqpy 启动示例 — 默认从 config.json 读取配置，构造参数可覆�
 import asyncio
 import os
 
-from napcat import NapCatClient
+from napcat.client import NapCatClient
 
 
 async def main():

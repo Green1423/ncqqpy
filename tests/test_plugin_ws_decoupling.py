@@ -26,7 +26,8 @@ TMP = ROOT / "tests" / ".test-tmp" / "plugin-ws-decoupling"
 
 from websockets.asyncio.server import serve                       # noqa: E402
 
-from napcat import MessageEvent, NapCatClient                     # noqa: E402
+from napcat.models import MessageEvent
+from napcat.client import NapCatClient
 
 PASSED = 0
 FAILED = 0
@@ -80,7 +81,7 @@ PROBE_PLUGIN = '''\
 """探针插件：把生命周期事件写进日志文件。"""
 import os
 
-from napcat import PluginBase
+from napcat.plugin import PluginBase
 
 LOG = os.environ["WS_PROBE_LOG"]
 

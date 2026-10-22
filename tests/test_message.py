@@ -20,7 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from napcat import MessageChain                     # noqa: E402
+from napcat.message import MessageChain
 from napcat.message import split_text               # noqa: E402
 
 PASSED = 0

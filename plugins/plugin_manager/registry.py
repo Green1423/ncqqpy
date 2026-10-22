@@ -38,7 +38,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from napcat import PluginError
+from napcat.errors import PluginError
 
 #: 合法插件名：目录名安全（不含 `/`、`..`、空格）
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")

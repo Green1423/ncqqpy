@@ -30,11 +30,14 @@ sys.path.insert(0, str(ROOT))
 TMP_DIR = ROOT / "tests" / ".test-tmp"
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-from napcat import (                                              # noqa: E402
-    CommandManager, ErrorReporter, EventBus, FileManager, GroupBinding,
-    PermissionManager, PluginDependencyError, PluginManager, TimerManager,
-)
-from napcat import deps as dep                                    # noqa: E402
+from napcat.command import CommandManager
+from napcat.errors import ErrorReporter, PluginDependencyError
+from napcat.events import EventBus, TimerManager
+from napcat.file_manager import FileManager
+from napcat.client import GroupBinding
+from napcat.permission import PermissionManager
+from napcat.plugin import PluginManager
+import napcat.deps as dep
 from napcat.config import ConfigManager                           # noqa: E402
 
 _passed = 0
@@ -83,7 +86,7 @@ def _logger() -> logging.Logger:
 
 
 PLUGIN_TEMPLATE = '''\
-from napcat import PluginBase
+from napcat.plugin import PluginBase
 
 EVENTS = []
 
@@ -404,7 +407,7 @@ async def test_runtime(work: Path):
     bad.mkdir(parents=True, exist_ok=True)
     (bad / "__init__.py").write_text("from .main import BadPlugin\n", encoding="utf-8")
     (bad / "main.py").write_text(
-        "from napcat import PluginBase\n\n\nclass BadPlugin(PluginBase):\n"
+        "from napcat.plugin import PluginBase\n\n\nclass BadPlugin(PluginBase):\n"
         "    name = 'bad'\n    requires = ['bad']   # 依赖自己\n", encoding="utf-8")
     mgr6, _c6, notifier6 = make_mgr(pdir6)
     await mgr6.load_all()
@@ -472,7 +475,7 @@ async def _raises(func) -> bool:
 
 
 def _msg(text: str, *, user_id: int = 999, private: bool = True):
-    from napcat import MessageEvent, Sender
+    from napcat.models import MessageEvent, Sender
     return MessageEvent(
         message_type="private" if private else "group",
         user_id=user_id, group_id=None if private else 123456,

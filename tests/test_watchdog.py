@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1165,8 +1166,10 @@ async def test_placeholder_convention(tmp: Path):
     from napcat.command import (
         CommandManager, PLACEHOLDER_LEGEND, build_usage, format_field_usage,
         describe_fields)
-    from napcat import (CommandSchema, QQField, DurationField, StrField,
-                        IntField, BoolField, ChoiceField, VariadicField)
+    from napcat.command import (
+        CommandSchema, QQField, DurationField, StrField, IntField, BoolField,
+        ChoiceField, VariadicField,
+    )
     from napcat.models import MessageEvent
 
     # (a) 两种记号是唯一约定，图例必须说清「不用输入符号」
@@ -1300,7 +1303,7 @@ async def test_placeholder_convention(tmp: Path):
 
     # (j) 命令组本体不能再自己追加一次图例（框架 render_help 已按需附上），
     #     否则帮助里会连出两行同样的说明。
-    from napcat import PLACEHOLDER_LEGEND as _LEGEND
+    from napcat.command import PLACEHOLDER_LEGEND as _LEGEND
     for path in ("plugins/bupt_news/main.py", "plugins/essential/main.py"):
         src = (ROOT / path).read_text(encoding="utf-8")
         check(f"{path} 不再手写图例（避免重复两行）",
@@ -1344,7 +1347,7 @@ async def test_plugin_reload_resilience(tmp: Path):
 
     def write_plugin(version: str, body: str = "", extra: str = "") -> None:
         main_py.write_text(
-            "from napcat import PluginBase\n"
+            "from napcat.plugin import PluginBase\n"
             f"VERSION_MARK = {version!r}\n"
             f"{extra}\n"
             "class DemoPlugin(PluginBase):\n"
@@ -1382,7 +1385,7 @@ async def test_plugin_reload_resilience(tmp: Path):
     check("★ 回滚后旧版本命令仍可用", await ask() == "1.0.0", await ask())
 
     # (b) 写入**导入错误**的新版本（本次线上事故的形态）→ 同样必须回滚
-    write_plugin("2.0.0", extra="from napcat import NO_SUCH_SYMBOL_XYZ")
+    write_plugin("2.0.0", extra="from napcat.plugin import NO_SUCH_SYMBOL_XYZ")
     ok = await mgr.reload("demoplug")
     check("导入错误时 reload 返回失败", ok is False, repr(ok))
     check("导入错误后插件仍在且旧命令可用",
@@ -2287,9 +2290,9 @@ async def test_pin_and_search(tmp: Path):
 
     # (a) 置顶：持久化到 state.json，重载后仍在
     check("初始没有置顶", store.pinned_ids() == [], str(store.pinned_ids()))
-    check("置顶一条成功", store.pin(b) is True, "")
-    check("重复置顶返回 False", store.pin(b) is False, "")
-    check("置顶不存在的 id 返回 False", store.pin(99999) is False, "")
+    check("置顶一条成功（返回置顶编号 P1）", store.pin(b) == 1, repr(store.pin(b)))
+    check("重复置顶返回 None", store.pin(b) is None, "")
+    check("置顶不存在的 id 返回 None", store.pin(99999) is None, "")
     check("pinned_ids 记下了", store.pinned_ids() == [b], str(store.pinned_ids()))
     check("is_pinned 正确", store.is_pinned(b) and not store.is_pinned(a), "")
 
@@ -2297,8 +2300,9 @@ async def test_pin_and_search(tmp: Path):
     check("★ 置顶在重载后仍然存在（持久化）",
           reloaded.pinned_ids() == [b], str(reloaded.pinned_ids()))
     raw = json.loads(state_path.read_text(encoding="utf-8"))
+    # pins 现在是 [{n, id}]：编号与通知 id 一起持久化
     check("★ 置顶写在 state.json 的 pins 字段",
-          raw.get("pins") == [b], str(raw.get("pins")))
+          raw.get("pins") == [{"n": 1, "id": b}], str(raw.get("pins")))
 
     # 多条置顶保持顺序（最近的在后）
     reloaded.pin(a)
@@ -2320,7 +2324,201 @@ async def test_pin_and_search(tmp: Path):
     check("清理失效置顶", dropped == 1 and reloaded.pinned_ids() == [b],
           f"dropped={dropped} pins={reloaded.pinned_ids()}")
     raw2 = json.loads(state_path.read_text(encoding="utf-8"))
-    check("清理结果已落盘", raw2.get("pins") == [b], str(raw2.get("pins")))
+    check("清理结果已落盘",
+          [p.get("id") for p in raw2.get("pins") or []] == [b],
+          str(raw2.get("pins")))
+
+    # (b2) 置顶**独立编号**：P1…递增、取消后空号复用、可按 P 取消
+    from plugins.bupt_news.store import external_code, decode_external, external_url
+    reloaded.clear_pins()
+    n1 = reloaded.pin(a)
+    n2 = reloaded.pin(b)
+    n3 = reloaded.pin(c)
+    check("置顶编号从 P1 起递增", (n1, n2, n3) == (1, 2, 3), f"{n1},{n2},{n3}")
+    check("pinned_entries 带编号",
+          [(e["n"], e["id"]) for e in reloaded.pinned_entries()]
+          == [(1, a), (2, b), (3, c)], str(reloaded.pinned_entries()))
+    check("取消 P2 生效", reloaded.unpin_number(2) is True, "")
+    check("取消后 P2 空出", [e["n"] for e in reloaded.pinned_entries()] == [1, 3],
+          str([e["n"] for e in reloaded.pinned_entries()]))
+    # 注意 add() 往 `store` 写，而这里用的是 `reloaded` —— 直接写它
+    e = reloaded.add_notice({
+        "key": "1154:新占位", "newsid": "999001", "treeid": "1154",
+        "title": "新的占位通知", "body": "新内容", "summary": "新",
+        "summary_ai": True, "student_ai": True, "for_students": True,
+        "date": "2026-10-09", "images": [], "tables": []})
+    reused = reloaded.pin(e)
+    check("★ 空号被复用（新置顶拿到 P2）", reused == 2, repr(reused))
+    check("pin_entry 按编号查", (reloaded.pin_entry("P3") or {}).get("id") == c, 
+          str(reloaded.pin_entry("P3")))
+    check("pin_number_of 反查编号", reloaded.pin_number_of(c) == 3, "")
+    # 重载后编号不变（持久化的是编号本身，不是推导出来的）
+    re2 = StateStore(str(state_path), str(notices_path))
+    # 持久化保留**置顶顺序**（P2 是后置顶的，排在末尾是正常的）
+    check("★ 置顶编号在重载后保持",
+          sorted((x["n"], x["id"]) for x in re2.pinned_entries())
+          == [(1, a), (2, e), (3, c)], str(re2.pinned_entries()))
+
+    # (b3) 非本地编号：**可解码**，不依赖映射表
+    code = external_code({"treeid": "1759", "newsid": "142679"})
+    check("外部编号形如 E<treeid>-<newsid>", code == "E1759-142679", repr(code))
+    check("★ 编号可解码出 treeid/newsid", decode_external(code) == ("1759", "142679"),
+          repr(decode_external(code)))
+    check("★ 编号能还原原文链接",
+          "wbtreeid=1759" in external_url(code)
+          and "wbnewsid=142679" in external_url(code), external_url(code))
+    check("本地编号/置顶编号不是外部编号",
+          decode_external("476") is None and decode_external("P1") is None, "")
+    check("缺 treeid/newsid 时返回空编号", external_code({"title": "x"}) == "", "")
+    # 缓存被清掉也不影响：编号自带链接
+    re2.external_put({"treeid": "1196", "newsid": "45767", "title": "旧通知",
+                      "url": external_url("E1196-45767"), "images": [], "tables": []})
+    check("external_get 缓存元数据",
+          (re2.external_get("E1196-45767") or {}).get("title") == "旧通知", "")
+    check("sweep 可回收（编号仍可解码）",
+          isinstance(re2.external_sweep(ttl=0), int), "")
+    check("缓存回收后编号依然可解码",
+          decode_external("E1196-45767") == ("1196", "45767"), "")
+
+    # (b4) 外部置顶：门户结果也能置顶（独立编号 + 快照），list 不因它崩
+    ext_notice = {"treeid": "1036", "newsid": "95475", "title": "扫描件通知",
+                  "date": "2021-12-09", "body": "",
+                  "url": external_url("E1036-95475"),
+                  "images": [{"pos": 0, "url": "http://x/a.jpg"}], "tables": []}
+    ext_num = reloaded.pin_external(ext_notice)
+    check("外部置顶分配到独立编号", ext_num == 4, repr(ext_num))
+    check("重复外部置顶返回 None",
+          reloaded.pin_external(ext_notice) is None, "")
+    check("外部置顶可按 E 编号取消",
+          reloaded.is_pinned_external("E1036-95475") is True, "")
+    check("pinned_ids 跳过外部置顶（无本地 id 不 KeyError）",
+          all(isinstance(i, int) for i in reloaded.pinned_ids()),
+          str(reloaded.pinned_ids()))
+    check("pinned_entries 带外部快照",
+          any(e.get("ext") == "E1036-95475" and (e.get("notice") or {}).get("title")
+              == "扫描件通知" for e in reloaded.pinned_entries()), "")
+
+    # (b5) E 编号置顶要带 AI 摘要：摘要写进置顶快照，且能持久化
+    from plugins.bupt_news.summarize import NoticeDigest
+
+    class _ExtSum:
+        enabled = True
+        last_error = ""
+
+        def __init__(self, digests):
+            self.digests = digests
+            self.calls = 0
+
+        async def summarize(self, notices):
+            self.calls += 1
+            return dict(self.digests)
+
+    plugin2 = BuptNewsPlugin(api=None, event_bus=None, timer=None, cmd_manager=None,
+                             perm_manager=None, file_manager=None, logger=_logger(),
+                             groups=None, cfg=_FakeCfg({"plugins": {"bupt_news": {
+                                 "data_dir": str(tmp / "ext-sum")}}}))
+    await plugin2.on_load()
+    plugin2._store = StateStore(
+        str(tmp / "ext-sum" / "s.json"), str(tmp / "ext-sum" / "n.jsonl"))
+    plugin2._summary_retry_next_at = 0.0
+
+    ext = {"treeid": "1196", "newsid": "45767", "title": "2017级研究生注射麻腮风疫苗",
+           "date": "2017-10-09", "body": "校医院定于10月13日注射麻腮风疫苗",
+           "url": external_url("E1196-45767"), "images": [], "tables": []}
+    plugin2._summarizer = _ExtSum({"45767": NoticeDigest("研究生麻腮风疫苗", False)})
+    got = await plugin2._summarize_external(ext)
+    check("★ 外部通知能补出 AI 摘要", got.get("summary") == "研究生麻腮风疫苗",
+          repr(got.get("summary")))
+    check("外部通知补出学生判定", got.get("for_students") is False,
+          repr(got.get("for_students")))
+
+    # 置顶它 → 摘要进快照并落盘
+    num = plugin2._store.pin_external(got)
+    check("置顶外部通知返回编号", isinstance(num, int) and num >= 1, repr(num))
+    snap = (plugin2._store.pin_entry(num) or {}).get("notice") or {}
+    check("★ 置顶快照带摘要", snap.get("summary") == "研究生麻腮风疫苗",
+          repr(snap.get("summary")))
+    plugin2._store.save()
+    re_ext = StateStore(str(tmp / "ext-sum" / "s.json"),
+                        str(tmp / "ext-sum" / "n.jsonl"))
+    persisted = (re_ext.pin_entry(num) or {}).get("notice") or {}
+    check("★ 外部置顶的摘要持久化（重载后仍在）",
+          persisted.get("summary") == "研究生麻腮风疫苗",
+          repr(persisted.get("summary")))
+
+    # 补摘要失败 → 保持 summary_ai 假，不写假摘要
+    ext2 = dict(ext, newsid="45768")
+    plugin2._summarizer = _ExtSum({})          # AI 什么都没返回
+    got2 = await plugin2._summarize_external(ext2)
+    check("摘要不可得时不写假摘要",
+          not got2.get("summary") and not got2.get("summary_ai"),
+          f"{got2.get('summary')!r} {got2.get('summary_ai')!r}")
+
+    # update_external_notice：缓存与置顶快照都要写回（曾只改了副本）
+    changed = plugin2._store.update_external_notice(
+        {"treeid": "1196", "newsid": "45767", "summary": "改过的摘要",
+         "summary_ai": True})
+    check("外部通知更新命中置顶快照", changed >= 1, str(changed))
+    check("★ 更新确实落到快照（不是改副本）",
+          ((plugin2._store.pin_entry(num) or {}).get("notice") or {}).get("summary")
+          == "改过的摘要", "")
+    check("更新已持久化",
+          ((StateStore(str(tmp / "ext-sum" / "s.json"),
+                       str(tmp / "ext-sum" / "n.jsonl")).pin_entry(num)
+            or {}).get("notice") or {}).get("summary") == "改过的摘要", "")
+
+    # (b6) 置顶上限：到达上限拒绝；加 force 才替换最早置顶的（FIFO）
+    from plugins.bupt_news.store import PIN_LIMIT_REACHED
+
+    lim = StateStore(str(tmp / "pin-limit" / "s.json"),
+                     str(tmp / "pin-limit" / "n.jsonl"))
+    ids = []
+    for i in range(6):
+        ids.append(lim.add_notice({
+            "key": f"k{i}", "newsid": str(8800 + i), "treeid": "1154",
+            "title": f"通知{i}", "body": "b", "summary": f"概要{i}",
+            "summary_ai": True, "student_ai": True, "for_students": True,
+            "images": [], "tables": []}))
+    check("上限内正常置顶",
+          [lim.pin(n, limit=3) for n in ids[:3]] == [1, 2, 3], "")
+    check("★ 到达上限时拒绝（返回 PIN_LIMIT_REACHED）",
+          lim.pin(ids[3], limit=3) == PIN_LIMIT_REACHED, "")
+    check("拒绝时没有改动置顶",
+          [(e["n"], e["id"]) for e in lim.pinned_entries()]
+          == [(1, ids[0]), (2, ids[1]), (3, ids[2])], "")
+    check("★ force 替换掉最早置顶的那条",
+          lim.pin(ids[3], limit=3, force=True) == 1, "")
+    check("替换项被记下（给用户提示用）",
+          (lim.last_pin_evicted or {}).get("id") == ids[0],
+          str(lim.last_pin_evicted))
+    check("★ 替换后仍是 3 条且编号紧凑",
+          sorted((e["n"], e["id"]) for e in lim.pinned_entries())
+          == [(1, ids[3]), (2, ids[1]), (3, ids[2])],
+          str([(e["n"], e["id"]) for e in lim.pinned_entries()]))
+    check("★ FIFO：再 force 一次淘汰第二个",
+          lim.pin(ids[4], limit=3, force=True) == 2, "")
+    check("FIFO 淘汰的是最早置顶的",
+          (lim.last_pin_evicted or {}).get("id") == ids[1],
+          str(lim.last_pin_evicted))
+    check("limit=0 表示不限", lim.pin(ids[5], limit=0) is not None, "")
+    check("外部置顶同样受上限约束",
+          lim.pin_external({"treeid": "1196", "newsid": "45767",
+                            "title": "外部", "url": external_url("E1196-45767"),
+                            "images": [], "tables": []},
+                           limit=3) == PIN_LIMIT_REACHED, "")
+    check("外部置顶加 force 可替换",
+          lim.pin_external({"treeid": "1196", "newsid": "45767",
+                            "title": "外部", "url": external_url("E1196-45767"),
+                            "images": [], "tables": []},
+                           limit=3, force=True) is not None, "")
+
+    # 命令层：拒绝提示 + force 生效 + 裸 --force/-f 识别
+    check("裸 --force 能被识别", BuptNewsPlugin._wants_force("/buptnews pin 4 --force"),
+          "")
+    check("短选项 -f 能被识别", BuptNewsPlugin._wants_force("/buptnews pin 4 -f"), "")
+    check("普通命令不会被误判", not BuptNewsPlugin._wants_force("/buptnews pin 4"), "")
+    check("--force 不会混进 ids",
+          "4" in BuptNewsPlugin._parse_tokens(["--force", "4", "-f"]), "")
 
     # (c) 搜索：标题/摘要/正文/单位/编号都可命中，大小写不敏感
     hits, total = store.search("疫苗")
@@ -2382,11 +2580,48 @@ async def test_pin_and_search(tmp: Path):
 
     out = await say("/buptnews list")
     check("★ list 里置顶条目前置", "📌 置顶（3）" in out, out[:120])
-    check("list 置顶区内含置顶编号",
-          all(f"📌 {i} " in out for i in (2, 3, 4)), out[:200])
+    check("list 置顶区按 P 编号列出",
+          out.count("📌") >= 3 and "P1 📌" in out or "P2 📌" in out, out[:200])
 
     out = await say("/buptnews pin")
     check("pin 无参查看置顶列表", "置顶通知（3）" in out, out[:80])
+
+    # 置顶展示：**只有 P 编号 + 概要**（不带 E 编号/日期/本地通知编号）
+    plugin._store.clear_pins()
+    num_local = plugin._store.pin(a)
+    num_ext = plugin._store.pin_external({
+        "treeid": "1196", "newsid": "45767", "title": "很长的原标题不该出现",
+        "date": "2017-10-09", "body": "", "url": external_url("E1196-45767"),
+        "summary": "外部摘要", "summary_ai": True,
+        "images": [], "tables": []})
+    out = await say("/buptnews pin")
+    check("★ 置顶行只显示 P 编号 + 概要",
+          f"P{num_local} 📌 " in out and f"P{num_ext} 📌 外部摘要" in out, out[:220])
+    check("★ 置顶行不显示 E 编号", "E1196-45767" not in out, out[:220])
+    check("★ 置顶行不显示日期", "2017-10-09" not in out, out[:220])
+    check("★ 置顶行不显示本地通知编号",
+          f"P{num_local} 📌 {a}" not in out and f"P{num_local} 📌 #{a}" not in out,
+          out[:220])
+    check("外部置顶有摘要时不再显示原标题", "很长的原标题不该出现" not in out,
+          out[:220])
+
+    out = await say("/buptnews list")
+    check("★ list 的置顶区同口径（P + 概要）",
+          f"P{num_ext} 📌 外部摘要" in out and "E1196-45767" not in out, out[:300])
+    # 恢复后续用例依赖的置顶（编号会重新分配，只要求集合一致）
+    plugin._store.clear_pins()
+    for i in (2, 3, 4):
+        plugin._store.pin(i)
+
+    # 外部置顶也要能在 list 的置顶区显示（不能 KeyError）
+    plugin._store.pin_external({"treeid": "1036", "newsid": "95475",
+                                "title": "扫描件通知", "date": "2021-12-09",
+                                "body": "", "url": external_url("E1036-95475"),
+                                "images": [], "tables": []})
+    out = await say("/buptnews list")
+    check("★ list 能显示外部置顶（不再 KeyError）",
+          "📌" in out and "扫描件通知" in out, out[:200])
+    plugin._store.unpin("E1036-95475")
 
     out = await say("/buptnews unpin 3")
     check("unpin 单条", store.pinned_ids() == [2, 4] and "已取消置顶" in out,
@@ -2509,8 +2744,11 @@ async def test_portal_search(tmp: Path):
           "本地" in out and "信息门户" in out, out[:120])
     check("★ 本地已有编号直接给出",
           f"{local_id}" in out, out[:200])
-    check("门户独有结果也给 get 链接",
-          "/buptnews get http://my.bupt.edu.cn" in out, out[-300:])
+    # 门户结果现在给**可解码的 E 编号**（不再给长链接）
+    check("门户独有结果给出 E 编号",
+          "E1196-45767" in out, out[-300:])
+    check("门户结果提示可用 E 编号 get/pin",
+          "E 编号" in out, out[-200:])
     check("本地库里已有的门户结果标出编号（可 get 编号）",
           f"#{local_id}" in out, out[:300])
 

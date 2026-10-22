@@ -25,10 +25,13 @@ sys.path.insert(0, str(ROOT))
 TMP_DIR = ROOT / "tests" / ".test-tmp"
 TMP_DIR.mkdir(parents=True, exist_ok=True)   # 新 clone 里没有它（.gitignore 排除）
 
-from napcat import (                                              # noqa: E402
-    CommandManager, EventBus, FileManager, GroupBinding, PermissionManager,
-    PluginManager, TimerManager, ErrorReporter,
-)
+from napcat.command import CommandManager
+from napcat.events import EventBus, TimerManager
+from napcat.file_manager import FileManager
+from napcat.client import GroupBinding
+from napcat.permission import PermissionManager
+from napcat.plugin import PluginManager
+from napcat.errors import ErrorReporter
 from napcat.config import ConfigManager                           # noqa: E402
 
 TMP = ROOT / "tests" / ".test-tmp" / "plugin-config"
@@ -101,7 +104,7 @@ def write_plugin(pdir: Path, name: str, body: str = "", template: str = "",
     pkg = pdir / name
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text(init if init is not None else (
-        "from napcat import PluginBase\n"
+        "from napcat.plugin import PluginBase\n"
         f"class {name.capitalize()}Plugin(PluginBase):\n"
         f"    name = {name!r}\n"
         "    version = '1.0.0'\n" + template + body), encoding="utf-8")
@@ -262,7 +265,7 @@ async def test_framework_contract():
     timer3.stop()
 
     # (f) 直接构造（不经管理器）同样初始化配置：测试/脚本手动 new 的路径
-    from napcat import PluginBase                                # noqa: PLC0415
+    from napcat.plugin import PluginBase
 
     class DirectPlugin(PluginBase):
         name = "direct"

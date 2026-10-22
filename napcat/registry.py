@@ -4,14 +4,14 @@
 挤在同一段代码里，找一条命令的逻辑要翻半个文件。本模块把注册变成**声明**：
 
     # plugins/demo/commands/chat.py —— 只有逻辑
-    from napcat import command
+    from napcat.registry import command
 
     @command("demo.say", schema=SaySchema, permission="", scope="all")
     async def say(plugin, params, event):
         ...
 
     # plugins/demo/jobs/cleanup.py —— 定时逻辑
-    from napcat import every
+    from napcat.registry import every
 
     @every(3600, name="demo.cleanup")
     async def cleanup(plugin):

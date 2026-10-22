@@ -14,8 +14,7 @@
 
 ```python
 # store.py —— 数据模型
-from napcat import Model, CharField, IntegerField, JSONField
-
+from napcat.store import Model, CharField, IntegerField, JSONField
 class Note(Model):
     title = CharField(max_length=200, index=True)
     body = CharField(default="")

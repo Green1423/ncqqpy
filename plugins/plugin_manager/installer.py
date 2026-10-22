@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from napcat import PluginError
+from napcat.errors import PluginError
 
 from .github import GithubClient, now_iso
 

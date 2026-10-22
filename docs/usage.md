@@ -110,8 +110,8 @@ pip install -e .
 
 ```python
 # main.py
-from napcat import NapCatClient, MessageChain
-
+from napcat.client import NapCatClient
+from napcat.message import MessageChain
 client = NapCatClient(
     ws_url="ws://127.0.0.1:3001",
     token="your_token",
@@ -254,8 +254,7 @@ client = NapCatClient(api_delay=0)            # 关闭节流（压测/联调）
 ### 3.1 基础文本与 @
 
 ```python
-from napcat import MessageChain
-
+from napcat.message import MessageChain
 # 纯文本
 MessageChain().text("Hello World!")
 
@@ -290,8 +289,7 @@ MessageChain().file("https://example.com/doc.pdf", name="doc.pdf")
 ### 3.3 音乐
 
 ```python
-from napcat import MusicPlatform
-
+from napcat.message import MusicPlatform
 # 平台 ID 音乐
 MessageChain().music_id(MusicPlatform.QQ, "12345")
 
@@ -337,7 +335,7 @@ MessageChain().miniapp({"app": "..."})
 MessageChain().location(39.9042, 116.4074, title="北京", content="朝阳区")
 
 # 名片分享
-from napcat import ContactType
+from napcat.message import ContactType
 MessageChain().contact(ContactType.QQ, "123456789")
 ```
 
@@ -423,11 +421,13 @@ combined = chain_a + chain_b
 ### 4.2 注册事件处理器
 
 ```python
-from napcat import (
-    NapCatClient, MessageEvent, GroupIncreaseEvent,
-    PokeEvent, FriendRequestEvent,
+from napcat.client import NapCatClient
+from napcat.models import (
+    MessageEvent,
+    GroupIncreaseEvent,
+    PokeEvent,
+    FriendRequestEvent,
 )
-
 client = NapCatClient(...)
 
 # ---- 方式一：client.on_message() 快捷装饰器 ----
@@ -512,8 +512,7 @@ async def log_middleware(event, handler):
 ### 5.1 消息发送
 
 ```python
-from napcat import MessageChain
-
+from napcat.message import MessageChain
 # 发送群消息
 result = await client.api.send_group_msg(
     group_id="123456",
@@ -646,8 +645,7 @@ await client.api.delete_qzone_msg(tid=result["tid"])
 ### 5.6 错误处理
 
 ```python
-from napcat import ApiError
-
+from napcat.api import ApiError
 try:
     await client.api.set_group_ban("123", "456", 600)
 except ApiError as e:
@@ -1005,8 +1003,7 @@ async def on_denied(packet, event):
 ### 6.7 手动解析命令
 
 ```python
-from napcat import CommandParser
-
+from napcat.command import CommandParser
 parser = CommandParser(prefixes=["/", "!"])
 packet = parser.parse("/ban 987654 600")
 
@@ -1158,8 +1155,9 @@ async def cmd_vip(packet):
 ### 8.1 插件基类
 
 ```python
-from napcat import PluginBase, MessageEvent, MessageChain
-
+from napcat.plugin import PluginBase
+from napcat.models import MessageEvent
+from napcat.message import MessageChain
 class MyPlugin(PluginBase):
     name = "my_plugin"
     version = "1.0.0"
@@ -1308,8 +1306,9 @@ PluginManager.unload()
 
 ```python
 # plugins/welcome.py
-from napcat import PluginBase, MessageEvent, MessageChain, GroupIncreaseEvent
-
+from napcat.plugin import PluginBase
+from napcat.models import MessageEvent, GroupIncreaseEvent
+from napcat.message import MessageChain
 class WelcomePlugin(PluginBase):
     name = "welcome"
     version = "1.0.0"

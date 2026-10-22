@@ -69,7 +69,7 @@
     - [15.4 ConfigManager API](#154-configmanager-api)
 16. [错误处理与用户反馈](#十六错误处理与用户反馈)
     - [16.1 三种写法，按你掌握的信息量选](#161-三种写法按你掌握的信息量选)
-    - [16.2 错误类型速查（`from napcat import ...`）](#162-错误类型速查from-napcat-import-)
+    - [16.2 错误类型速查（`from napcat.errors import ...`）](#162-错误类型速查from-napcaterrors-import-)
     - [16.3 框架怎么反馈](#163-框架怎么反馈)
     - [16.4 配置（`config.json` 顶层）](#164-配置configjson-顶层)
     - [16.5 插件作者要守的两条](#165-插件作者要守的两条)
@@ -84,8 +84,7 @@
 
 ```python
 # plugins/hello/__init__.py
-from napcat import PluginBase
-
+from napcat.plugin import PluginBase
 class HelloPlugin(PluginBase):
     name = "hello"
     version = "1.0.0"
@@ -172,6 +171,34 @@ class ReportPlugin(PluginBase):
 - **不能依赖自己**，也不能同一个插件**同时**写在 `requires` 和
   `optional_requires` 里（语义矛盾）；
 - 同名依赖写两遍时**带版本要求的那条赢**（与书写顺序无关）。
+
+---
+
+### 1.4 从哪导入（包结构分类）
+
+`napcat` 顶层**不再一次性导出所有名字**：每个符号从「拥有它」的子模块导入，
+导入路径本身就是分类。
+
+| 要用的东西 | 导入路径 |
+|------|------|
+| 客户端 / 群绑定 | `from napcat.client import NapCatClient, GroupBinding` |
+| 插件基类 / 插件管理器 | `from napcat.plugin import PluginBase, PluginManager` |
+| 事件与数据模型（`MessageEvent`、`Sender`、枚举、`parse_event`…） | `from napcat.models import MessageEvent, Sender` |
+| 事件总线 / 定时任务 | `from napcat.events import EventBus, TimerManager` |
+| 消息构造 | `from napcat.message import MessageChain` |
+| 命令 / Schema / 参数字段 | `from napcat.command import CommandSchema, StrField, CommandManager` |
+| 声明式注册（`@command` / `@event` / `@every`） | `from napcat.registry import command, event, every` |
+| 权限 | `from napcat.permission import PermissionManager` |
+| 错误类型 / 统一反馈 | `from napcat.errors import PluginError, ErrorReporter` |
+| sqlite ORM | `from napcat.store import Model, CharField, Database` |
+| 配置 / 文件 | `from napcat.config import ConfigManager` / `from napcat.file_manager import FileManager` |
+| 服务端拉起 / 看门狗 | `from napcat.launcher import ServerLauncher` / `from napcat.watchdog import Watchdog` |
+
+- 旧写法 `from napcat import X` 仍然可用（框架发 `DeprecationWarning`，并告诉你
+  正确路径），**新代码请用上表**；
+- 好处很直接：`import napcat` 不再连锁加载 client / aiohttp / websockets 这些重依赖，
+  只用一个 `Model` 不会把整个客户端拉起来；
+- 框架自己的模块之间一律相对导入（`from .models import …`），不依赖顶层 re-export。
 
 ---
 
@@ -281,8 +308,7 @@ class MyPlugin(PluginBase):
 ### 3.1 动态卸载（事件/命令/定时器）
 
 ```python
-from napcat import normalize_text          # 归一化入口（框架统一提供）
-
+from napcat.command import normalize_text          # 归一化入口（框架统一提供）
 class MyPlugin(PluginBase):
     async def on_enable(self):
         @self.on_message()
@@ -309,8 +335,9 @@ class MyPlugin(PluginBase):
 ### 3.2 基础消息处理
 
 ```python
-from napcat import PluginBase, MessageEvent, MessageChain
-
+from napcat.plugin import PluginBase
+from napcat.models import MessageEvent
+from napcat.message import MessageChain
 class MyPlugin(PluginBase):
     name = "my"
     version = "1.0.0"
@@ -338,11 +365,13 @@ class MyPlugin(PluginBase):
 ### 3.3 指定事件类型
 
 ```python
-from napcat import (
-    GroupIncreaseEvent, GroupDecreaseEvent, GroupBanEvent,
-    FriendRequestEvent, PokeEvent,
+from napcat.models import (
+    GroupIncreaseEvent,
+    GroupDecreaseEvent,
+    GroupBanEvent,
+    FriendRequestEvent,
+    PokeEvent,
 )
-
 class MyPlugin(PluginBase):
     async def on_enable(self):
         @self.on_event(GroupIncreaseEvent)
@@ -372,8 +401,7 @@ async def cmd_ping(packet):
 ### 4.2 带 Schema 验证的命令
 
 ```python
-from napcat import CommandSchema, QQField, DurationField, StrField
-
+from napcat.command import CommandSchema, QQField, DurationField, StrField
 class BanSchema(CommandSchema):
     user_id = QQField(required=True, description="目标QQ")
     duration = DurationField(default=600, min=0, max=2592000)
@@ -422,8 +450,8 @@ async def cmd_ban(params, event):
 - 报错文案里的参数提示也要用同一记号（如 `请指定群号: /bind <群号>`）。
 
 ```python
-from napcat import build_usage, PLACEHOLDER_LEGEND   # 需要手写时从这里取
-
+from napcat.command import PLACEHOLDER_LEGEND   # 需要手写时从这里取
+from napcat.command import build_usage
 usage = build_usage("ban", BanSchema)   # → "ban <user_id> [duration=600] [reason]"
 ```
 
@@ -791,8 +819,7 @@ def _register_commands(self):
 ### 6.6 错误处理
 
 ```python
-from napcat import ApiError
-
+from napcat.api import ApiError
 try:
     await self.api.set_group_ban("123", "456", 600)
 except ApiError as e:
@@ -905,8 +932,7 @@ self.perm.user_level_source(uid, group_id=123, is_group=True)   # 来源诊断
 ## 八、消息构造
 
 ```python
-from napcat import MessageChain, MusicPlatform, ContactType
-
+from napcat.message import MessageChain, MusicPlatform, ContactType
 # 基础
 MessageChain().text("你好").at("123456").face("123")
 
@@ -940,8 +966,7 @@ chain.to_cq()    # → "你好[CQ:at,qq=123456]"
 要存的结构化数据（有查询、并发或增长预期）别再手写 JSON 文件：
 
 ```python
-from napcat import Model, CharField, IntegerField, JSONField
-
+from napcat.store import Model, CharField, IntegerField, JSONField
 class Note(Model):
     title = CharField(max_length=200, index=True)
     body = CharField(default="")
@@ -1011,11 +1036,10 @@ await self.files.upload_group_file(
 
 ```python
 # plugins/welcome/__init__.py
-from napcat import (
-    PluginBase, MessageEvent, MessageChain,
-    GroupIncreaseEvent, CommandSchema, StrField,
-)
-
+from napcat.plugin import PluginBase
+from napcat.models import MessageEvent, GroupIncreaseEvent
+from napcat.message import MessageChain
+from napcat.command import CommandSchema, StrField
 class WelcomeSchema(CommandSchema):
     text = StrField(default="欢迎加入！", max_length=200)
 
@@ -1124,7 +1148,7 @@ plugins/demo/
 ### 14.2 注册：`plugin.py`（没有逻辑）
 
 ```python
-from napcat import PluginBase
+from napcat.plugin import PluginBase
 from .commands import admin, chat
 from .events import message
 from .jobs import cleanup
@@ -1170,7 +1194,7 @@ async def say(plugin, params, event):
 
 ```python
 # events/message.py
-from napcat import MessageEvent
+from napcat.models import MessageEvent
 from napcat.registry import event
 
 
@@ -1384,8 +1408,11 @@ class MyPlugin(PluginBase):
 ### 16.1 三种写法，按你掌握的信息量选
 
 ```python
-from napcat import PluginConfigError, PluginTimeoutError, PluginRateLimitError
-
+from napcat.errors import (
+    PluginConfigError,
+    PluginTimeoutError,
+    PluginRateLimitError,
+)
 class MyPlugin(PluginBase):
     async def on_enable(self):
         @self.register_command("ask", schema=AskSchema)
@@ -1409,7 +1436,7 @@ class MyPlugin(PluginBase):
 `self.errors`（`ErrorReporter`）是给**需要自己投递**的插件用的
 （例如 ai_chat 要按会话分段/出图）：`render()` 取文案、`log()` 记日志（带编号）。
 
-### 16.2 错误类型速查（`from napcat import ...`）
+### 16.2 错误类型速查（`from napcat.errors import ...`）
 
 | 类型 | 分类文案 | 可重试 | 受众 | 用在哪 |
 |------|---------|--------|------|--------|

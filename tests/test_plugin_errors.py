@@ -26,10 +26,15 @@ sys.path.insert(0, str(ROOT))
 TMP_DIR = ROOT / "tests" / ".test-tmp"
 TMP_DIR.mkdir(parents=True, exist_ok=True)   # 新 clone 里没有它（.gitignore 排除）
 
-from napcat import (                                              # noqa: E402
-    CommandExecutionError, CommandManager, EventBus, FileManager, MessageChain,
-    MessageEvent, PermissionManager, PluginBase, PluginManager, PluginTimeoutError,
-    PluginConfigError, PluginLoadError, PluginRuntimeError, TimerManager,
+from napcat.command import CommandExecutionError, CommandManager
+from napcat.events import EventBus, TimerManager
+from napcat.file_manager import FileManager
+from napcat.message import MessageChain
+from napcat.models import MessageEvent
+from napcat.permission import PermissionManager
+from napcat.plugin import PluginBase, PluginManager
+from napcat.errors import (
+    PluginTimeoutError, PluginConfigError, PluginLoadError, PluginRuntimeError,
     ErrorReporter,
 )
 from napcat.errors import PluginAccessError                           # noqa: E402
@@ -276,7 +281,7 @@ def write_plugin(pdir: Path, name: str, body: str = "", sub: dict | None = None,
     pkg = pdir / name
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text(init if init is not None else (
-        "from napcat import PluginBase\n"
+        "from napcat.plugin import PluginBase\n"
         f"class {name.capitalize()}Plugin(PluginBase):\n"
         f"    name = {name!r}\n"
         "    version = '1.0.0'\n" + body), encoding="utf-8")
@@ -381,7 +386,7 @@ async def test_plugin_manager_defects():
     # (d) unload 清理整棵模块子树（以前只 pop 父模块，改子模块不生效）
     pdir2 = TMP / "submodules" / "plugins"
     write_plugin(pdir2, "staleplug", init=(
-        "from napcat import PluginBase\n"
+        "from napcat.plugin import PluginBase\n"
         "from .sub import MARK\n"
         "class StaleplugPlugin(PluginBase):\n"
         "    name = 'staleplug'\n"

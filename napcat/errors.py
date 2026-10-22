@@ -14,7 +14,7 @@
 
 用法（插件侧）::
 
-    from napcat import PluginTimeoutError, PluginConfigError
+    from napcat.errors import PluginTimeoutError, PluginConfigError
 
     class MyPlugin(PluginBase):
         async def on_enable(self):

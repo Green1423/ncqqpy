@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 import aiohttp
 
-from napcat import PluginExternalError
+from napcat.errors import PluginExternalError
 
 DEFAULT_TIMEOUT = 20.0
 UA = "ncqqpy-plugin-manager"

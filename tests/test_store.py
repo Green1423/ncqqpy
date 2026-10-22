@@ -18,11 +18,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from napcat import (                                    # noqa: E402
-    Database, Model, CharField, TextField, IntegerField, FloatField,
-    BooleanField, JSONField, DateTimeField, StoreError, FieldError,
-    StoreIntegrityError,
+from napcat.store import (
+    Database, Model, CharField, TextField, IntegerField, FloatField, BooleanField,
+    JSONField, DateTimeField, StoreError, FieldError,
 )
+from napcat.store import IntegrityError as StoreIntegrityError
 
 PASSED = 0
 FAILED = 0
@@ -360,7 +360,7 @@ def test_bulk_and_errors():
 
 def test_plugin_integration():
     print("\n[12] 插件集成：PluginBase.database() 落点 / 卸载关闭")
-    from napcat import PluginBase
+    from napcat.plugin import PluginBase
     plugin_root = TMP / "plugins" / "demo"
     plugin_root.mkdir(parents=True, exist_ok=True)
 

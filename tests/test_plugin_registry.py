@@ -22,11 +22,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 TMP = ROOT / "tests" / ".test-tmp" / "plugin-registry"
 
-from napcat import (                                          # noqa: E402
-    CommandManager, CommandSchema, EventBus, FileManager, GroupBinding,
-    MessageEvent, PermissionManager, PluginBase, PluginManager, StrField,
-    TimerManager,
-)
+from napcat.command import CommandManager, CommandSchema, StrField
+from napcat.events import EventBus, TimerManager
+from napcat.file_manager import FileManager
+from napcat.client import GroupBinding
+from napcat.models import MessageEvent
+from napcat.permission import PermissionManager
+from napcat.plugin import PluginBase, PluginManager
 from napcat.config import ConfigManager                       # noqa: E402
 from napcat.registry import collect, command, daily, delay, event, every  # noqa: E402
 
@@ -251,9 +253,9 @@ async def test_unload_cleans_everything():
     (pkg / "__init__.py").write_text(
         "from .plugin import DemoPlugin\n\nPLUGIN = DemoPlugin\n", encoding="utf-8")
     (pkg / "plugin.py").write_text(
-        "from napcat import PluginBase\n"
+        "from napcat.plugin import PluginBase\n"
         "from napcat.registry import command, event, every\n"
-        "from napcat import MessageEvent\n\n"
+        "from napcat.models import MessageEvent\n\n"
         "from . import mods\n\n"
         "class DemoPlugin(PluginBase):\n"
         "    name = 'demo'\n"
@@ -262,7 +264,7 @@ async def test_unload_cleans_everything():
         encoding="utf-8")
     (pkg / "mods.py").write_text(
         "from napcat.registry import command, event, every\n"
-        "from napcat import MessageEvent\n\n"
+        "from napcat.models import MessageEvent\n\n"
         "@command('demo.hi', permission='', scope='all')\n"
         "async def hi(plugin, packet, event):\n"
         "    return 'hi'\n\n"

@@ -38,11 +38,14 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[3]          # 框架仓库根
 sys.path.insert(0, str(ROOT))
 
-from napcat import (                                                # noqa: E402
-    CommandManager, ErrorReporter, EventBus, FileManager, GroupBinding,
-    MessageEvent, PermissionManager, PluginManager, PluginBase, Sender,
-    TimerManager,
-)
+from napcat.command import CommandManager
+from napcat.errors import ErrorReporter
+from napcat.events import EventBus, TimerManager
+from napcat.file_manager import FileManager
+from napcat.client import GroupBinding
+from napcat.models import MessageEvent, Sender
+from napcat.permission import PermissionManager
+from napcat.plugin import PluginManager, PluginBase
 from napcat.config import ConfigManager                             # noqa: E402
 
 PLUGIN_SRC = Path(__file__).resolve().parents[1]   # plugins/plugin_manager
@@ -81,7 +84,7 @@ def check(name: str, ok: bool, detail: str = "") -> bool:
 PLUGIN_FILES_V1 = {
     "__init__.py": "from .main import DemoPlugin\n",
     "main.py": (
-        "from napcat import PluginBase\n\n\n"
+        "from napcat.plugin import PluginBase\n\n\n"
         "class DemoPlugin(PluginBase):\n"
         "    name = 'demo'\n"
         "    version = '1.0.0'\n"
@@ -703,7 +706,7 @@ def dep_files(name: str, requires=()) -> dict[str, str]:
     extra = "".join(f"    requires = {list(requires)!r}\n" if requires else "")
     return {
         "__init__.py": "from .main import P\n",
-        "main.py": ("from napcat import PluginBase\n\n\nclass P(PluginBase):\n"
+        "main.py": ("from napcat.plugin import PluginBase\n\n\nclass P(PluginBase):\n"
                     f"    name = {name!r}\n    version = '1.0.0'\n{extra}"),
     }
 

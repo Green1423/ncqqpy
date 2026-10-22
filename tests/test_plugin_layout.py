@@ -23,10 +23,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 TMP = ROOT / "tests" / ".test-tmp" / "plugin-layout"
 
-from napcat import (                                          # noqa: E402
-    CommandManager, EventBus, FileManager, GroupBinding, MessageEvent,
-    PermissionManager, PluginManager, TimerManager,
-)
+from napcat.command import CommandManager
+from napcat.events import EventBus, TimerManager
+from napcat.file_manager import FileManager
+from napcat.client import GroupBinding
+from napcat.models import MessageEvent
+from napcat.permission import PermissionManager
+from napcat.plugin import PluginManager
 from napcat.config import ConfigManager                       # noqa: E402
 
 PASSED = 0
@@ -115,7 +118,7 @@ __all__ = ["DemoPlugin"]
         "helper.py": '''def answer() -> str:
     return "helper-ok"
 ''',
-        "main.py": '''from napcat import PluginBase
+        "main.py": '''from napcat.plugin import PluginBase
 from .helper import answer
 
 
@@ -150,7 +153,7 @@ class DemoPlugin(PluginBase):
 async def test_multiple_candidates(capture: Capture):
     print("\n[2] 多个候选：显式 PLUGIN 选对，没有声明会告警")
     root = TMP / "multi"
-    base_main = '''from napcat import PluginBase
+    base_main = '''from napcat.plugin import PluginBase
 
 
 class BasePlugin(PluginBase):
@@ -207,7 +210,7 @@ async def test_bad_plugin_attribute(capture: Capture):
 
 PLUGIN = 42          # 写错了
 ''',
-        "main.py": '''from napcat import PluginBase
+        "main.py": '''from napcat.plugin import PluginBase
 
 
 class BadPlugin(PluginBase):
@@ -239,7 +242,7 @@ async def test_single_file_still_works(capture: Capture):
     root = TMP / "single"
     pdir = root / "plugins"
     pdir.mkdir(parents=True, exist_ok=True)
-    (pdir / "solo.py").write_text('''from napcat import PluginBase
+    (pdir / "solo.py").write_text('''from napcat.plugin import PluginBase
 
 
 class SoloPlugin(PluginBase):
@@ -268,7 +271,7 @@ async def test_reload_picks_new_submodule_code(capture: Capture):
 
 PLUGIN = DemoPlugin
 ''',
-        "main.py": '''from napcat import PluginBase
+        "main.py": '''from napcat.plugin import PluginBase
 
 
 class DemoPlugin(PluginBase):

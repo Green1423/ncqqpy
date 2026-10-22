@@ -23,9 +23,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 TMP = ROOT / "tests" / ".test-tmp" / "userperm"
 
-from napcat import (                                          # noqa: E402
-    CommandManager, MessageEvent, NapCatClient, PermissionManager, Sender,
-)
+from napcat.command import CommandManager
+from napcat.models import MessageEvent, Sender
+from napcat.client import NapCatClient
+from napcat.permission import PermissionManager
 from napcat.config import ConfigManager                       # noqa: E402
 from napcat.permission import ASSIGNABLE_USER_LEVELS          # noqa: E402
 

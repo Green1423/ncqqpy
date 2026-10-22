@@ -38,12 +38,12 @@ import json
 import shutil
 from pathlib import Path
 
-from napcat import (
-    PluginBase, PluginConfigError, PluginRuntimeError,
-    ChoiceField, CommandSchema, StrField, VariadicField,
-    CommandPacket,
+from napcat.plugin import PluginBase
+from napcat.errors import PluginConfigError, PluginRuntimeError
+from napcat.command import (
+    ChoiceField, CommandSchema, StrField, VariadicField, CommandPacket,
 )
-from napcat import deps as plugindeps
+import napcat.deps as plugindeps
 
 from . import registry
 from .github import GithubClient, GithubError, env_token
