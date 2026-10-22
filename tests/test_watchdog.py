@@ -3347,8 +3347,14 @@ async def test_targets_commands(tmp: Path):
     out = await say(f"/buptnews dektoken user {jwt(100000666)}", 100000666)
     check("★ 活动未开启时拒绝设 token", "event=off" in out, out[:60])
     await say("/buptnews set user 100000666 event=on")
-    out = await say(f"/buptnews dektoken user {jwt(100000777)}", 100000666)
-    check("★ 粘别人的 token 被拒（sub 校验）", "不是你的" in out, out[:70])
+    # ⚠️ `sub` 是**学号**，与 QQ 号无关：不能拿 sub == QQ 做"是不是本人"的判定，
+    # 否则所有正常 token 都会被误拒（踩过）。归属只能靠"只能写自己名下的绑定"。
+    out = await say(f"/buptnews dektoken user {jwt(2026999999)}", 100000666)
+    check("★ 学号与 QQ 不同也能保存（不误拒）",
+          "已保存" in out, out[:70])
+    check("★ 保存时记录 token 的学号（sub）",
+          plugin._targets()["users"][100000666].get("dekt_sub") == "2026999999",
+          str(plugin._targets()["users"][100000666].get("dekt_sub")))
     out = await say(f"/buptnews dektoken user {jwt(100000666)}", 100000666)
     check("★ 自己的 token 可保存并立即生效",
           "已保存" in out and any(b["kind"] == "user"
