@@ -140,10 +140,28 @@ class FloatField(BaseField):
 
 
 class BoolField(BaseField):
-    """布尔参数 — 支持 true/false/1/0/yes/no"""
+    """布尔参数 — 支持 true/false/1/0/yes/no，以及单字母简写（`-y`）。
+
+    `short` 的取值：
+    - 不传（`None`）：自动用**字段名首字母**（仅 ASCII 字母；同字母有多个布尔
+      字段时不猜，校验时提示改用 `--字段名`）；
+    - 传一个字母（`short="f"`）：显式指定；
+    - 传空串（`short=""`）：关闭简写。
+    """
 
     TRUTHY = {"true", "1", "yes", "on", "y", "是", "开"}
     FALSEY = {"false", "0", "no", "off", "n", "否", "关"}
+
+    def __init__(self, *, short: Optional[str] = None, **kwargs):
+        super().__init__(**kwargs)
+        if short is not None:
+            cleaned = str(short).strip().lstrip("-").lower()
+            if cleaned and (len(cleaned) != 1 or not cleaned.isascii()
+                            or not cleaned.isalpha()):
+                raise ValueError(
+                    f"BoolField.short 必须是单个 ASCII 字母或空串：{short!r}")
+            short = cleaned
+        self.short = short
 
     def _clean(self, value: str) -> bool:
         v = value.strip().lower()
@@ -274,11 +292,66 @@ class CommandSchema(metaclass=CommandSchemaMeta):
     def get_fields(cls) -> dict[str, BaseField]:
         return dict(getattr(cls, "_fields", {}))
 
+    @classmethod
+    def short_flag_map(cls) -> tuple[dict[str, str], dict[str, list[str]]]:
+        """布尔字段的单字母简写：`({字母: 字段名}, {字母: [歧义字段…]})`。
+
+        显式 `short=` 优先；否则用字段名首字母（仅 ASCII 字母）且要求唯一。
+        歧义**不猜** —— 由 `validate()` 报错让用户写 `--字段名`。
+        """
+        explicit: dict[str, list[str]] = {}
+        auto: dict[str, list[str]] = {}
+        for name, field in cls.get_fields().items():
+            if not isinstance(field, BoolField):
+                continue
+            if field.short == "":
+                continue
+            if field.short:
+                explicit.setdefault(field.short, []).append(name)
+                continue
+            first = name[:1].lower()
+            if first and first.isascii() and first.isalpha():
+                auto.setdefault(first, []).append(name)
+
+        mapping: dict[str, str] = {}
+        ambiguous: dict[str, list[str]] = {}
+        for letter, names in explicit.items():
+            if len(names) > 1:
+                ambiguous[letter] = names
+            else:
+                mapping[letter] = names[0]
+        for letter, names in auto.items():
+            if letter in mapping or letter in ambiguous:
+                continue          # 显式简写优先
+            if len(names) > 1:
+                ambiguous[letter] = names
+            else:
+                mapping[letter] = names[0]
+        return mapping, ambiguous
+
     def validate(self, args: list[str], kwargs: dict[str, str]) -> "ValidatedParams":
         """验证 args/kwargs 对 Schema 的匹配，返回 ValidatedParams"""
         fields = self.get_fields()
         errors: dict[str, list[str]] = {}
         cleaned: dict[str, Any] = {}
+
+        # 单字母简写：解析器把 `-y` 收进 kwargs["y"]="true"，这里把它映射到
+        # 对应的布尔字段（字段名精确匹配优先；歧义时明确报错，不猜）。
+        kwargs = dict(kwargs or {})
+        short_map, short_ambiguous = self.short_flag_map()
+        for key in [k for k in kwargs if k not in fields]:
+            letter = key.lower()
+            if letter in short_ambiguous:
+                errors[f"-{letter}"] = [
+                    f"短选项 -{letter} 有歧义：{' / '.join(short_ambiguous[letter])}"
+                    "（请用 --字段名=值）"]
+                continue
+            target = short_map.get(letter)
+            if target is None:
+                continue
+            value = kwargs.pop(key)
+            if target not in kwargs:
+                kwargs[target] = value
 
         # 按位置映射 args → field（跳过 variadic 之前的字段）
         field_names = list(fields.keys())
@@ -685,7 +758,7 @@ def build_usage(name: str, schema_cls: "Type[CommandSchema]") -> str:
     return " ".join(parts)
 
 
-def describe_fields(fields: dict) -> list[str]:
+def describe_fields(fields: dict, short_map: dict[str, str] = None) -> list[str]:
     """参数表正文行 —— 字段名同样按 `<>` / `[]` 标注，与用法行口径一致。
 
     可选且**无默认值**的字段额外标注「保持原值」：这类字段省略时不会被覆盖，
@@ -695,6 +768,9 @@ def describe_fields(fields: dict) -> list[str]:
     for fname, field in fields.items():
         req = "必填" if field.required else "可选"
         desc = f" — {field.description}" if field.description else ""
+        short = (short_map or {}).get(fname)
+        if short:
+            desc += (f"（简写：-{short}）" if desc else f" — 简写：-{short}")
         if field.default not in (None, ""):
             default = f" [默认: {field.default}]"
         elif not field.required and not isinstance(field, VariadicField):
@@ -945,18 +1021,28 @@ class CommandHandler:
                 # 生成传参示例（位置/键值两种写法都用同一套占位符记号）
                 pos_args = []
                 kv_args = []
+                short_map, _short_ambiguous = self.schema.short_flag_map()
+                # short_flag_map 是「字母 → 字段名」，帮助里按字段查简写
+                letters = {fname: letter for letter, fname in short_map.items()}
                 for fname, field in fields.items():
                     pos_args.append(format_field_usage(fname, field))
+                    short = letters.get(fname)
                     if field.required:
-                        kv_args.append(f"--{fname}=<值>")
+                        long_form = f"--{fname}=<值>"
                     elif field.default not in (None, ""):
-                        kv_args.append(f"[--{fname}={field.default}]")
+                        long_form = f"--{fname}={field.default}"
                     else:
-                        kv_args.append(f"[--{fname}=<值>]")
+                        long_form = f"--{fname}=<值>"
+                    if isinstance(field, BoolField) and short:
+                        # 布尔字段同时给出简写与长写法：`-y` = `--yes=true`
+                        token = f"-{short}|{long_form}"
+                        kv_args.append(token if field.required else f"[{token}]")
+                        continue
+                    kv_args.append(long_form if field.required else f"[{long_form}]")
                 parts.append(f"\n  位置传参：/{prefix}{self.name} {' '.join(pos_args)}")
                 parts.append(f"\n  键值传参：/{prefix}{self.name} {' '.join(kv_args)}")
                 parts.append("\n  参数")
-                parts.extend(describe_fields(fields))
+                parts.extend(describe_fields(fields, short_map=letters))
         if self.subcommands:
             # 子命令清单：名字 + **权限/作用域** + 介绍。
             # ⚠️ 不带参数与用法（那属于第三级 `/help <命令组> <子命令>`）；但**权限与

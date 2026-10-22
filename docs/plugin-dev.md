@@ -704,7 +704,7 @@ def _register_commands(self):
 | `StrField` | `str` | `min_length`, `max_length`, `regex`, `choices` |
 | `IntField` | `int` | `min`, `max`, `choices` |
 | `FloatField` | `float` | `min`, `max` |
-| `BoolField` | `bool` | 支持 true/false/1/0/yes/no |
+| `BoolField` | `bool` | 支持 true/false/1/0/yes/no；**单字母简写**：默认用字段名首字母（`-y`），冲突时不猜并提示；`short="f"` 指定、`short=""` 关闭。简写等价 `--字段=true`，帮助里显示 `[-y|--字段=<值>]` 与「简写：-y」 |
 | `QQField` | `int` | 自动校验 QQ 号范围，支持 `[@123456]` 格式 |
 | `DurationField` | `int`(秒) | 支持 `600` / `10m` / `1h30m` / `2d` |
 | `ChoiceField` | `str` | 枚举选项，大小写不敏感 |

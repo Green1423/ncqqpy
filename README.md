@@ -81,6 +81,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ./venv/bin/python -B tests/test_public_api.py     # 公开 API 分类（导入路径）
 ./venv/bin/python -B tests/test_command_alias.py  # 命令别名（/alias）
 ./venv/bin/python -B tests/test_unicode_names.py  # 命令名/别名支持非 ASCII
+./venv/bin/python -B tests/test_bool_short_flags.py  # 布尔参数简写（-y）
 ```
 
 其余套件（命令解析、帮助结构、权限覆盖）见 [`tests/README.md`](tests/README.md)。
@@ -105,6 +106,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_public_api.py` | 覆盖 |
 | `tests/test_command_alias.py` | 覆盖 |
 | `tests/test_unicode_names.py` | 覆盖 |
+| `tests/test_bool_short_flags.py` | 覆盖 |
 
 ## 目录
 
