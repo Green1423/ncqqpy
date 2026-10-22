@@ -3376,14 +3376,29 @@ async def test_targets_commands(tmp: Path):
     data = plugin._targets()
     data["groups"][100000777]["token_by"] = 0
     plugin._save_targets(data)
-    plugin._token_warn_dates = {}
+    plugin._store.meta_set("token_warn_dates", {})   # 模拟"到了新的一天"
     sent.clear()
     await plugin._warn_token_expiry()
     check("★ 没记设置者时通知超管（兜底）",
           any(uid == "1" and "过期" in text for uid, text in sent), str(sent)[:120])
     sent.clear()
-    await plugin._warn_token_expiry()          # 不能清 _token_warn_dates
+    await plugin._warn_token_expiry()          # 不能清已记录的日期
     check("同一天不重复提醒（避免刷屏）", sent == [], str(sent))
+    # ★ 热重载会重建插件实例：提醒日期必须落在 state.json 里，否则会重复发
+    check("★ 提醒日期已持久化到 state.json",
+          (plugin._store.meta_get("token_warn_dates") or {}).get("group-100000777")
+          == plugin._today(),
+          str(plugin._store.meta_get("token_warn_dates")))
+    fresh_plugin = BuptNewsPlugin(api=plugin.api, event_bus=None, timer=None,
+                                  cmd_manager=None, perm_manager=None,
+                                  file_manager=None, logger=_logger(),
+                                  groups=None, cfg=plugin.config)
+    await fresh_plugin.on_load()               # 模拟重载后的新实例
+    fresh_plugin._act_bindings = plugin._act_bindings
+    fresh_plugin.api = plugin.api
+    sent.clear()
+    await fresh_plugin._warn_token_expiry()
+    check("★ 重载后不会重复提醒（状态跨实例）", sent == [], str(sent))
 
     # token 文件落在数据目录且权限收紧
     tokens = sorted(Path(data_dir, "dekt-tokens").glob("*.txt"))
