@@ -992,6 +992,13 @@ class CommandManager:
         # 内置命令同样可被覆盖，而构造期/register() 就是唯一的重放点。
         self._perm_overrides: dict[str, str] = {}
         self._load_perm_overrides()
+        # 运行时命令别名：{命令规范名: [别名…]}，来源 config.json 的
+        # `command_aliases`。与 /perm 同一套纪律：**重放点在登记处**
+        # （`_install_handler`），所以插件热重载/重新注册后别名不会丢；
+        # 「配置里有这个命令」表示**接管**该命令的全部别名（空列表 = 清空，
+        # 连插件在 register(aliases=…) 里声明的也压掉）。
+        self._alias_overrides: dict[str, list[str]] = {}
+        self._load_alias_overrides()
         self._register_builtins()
 
     # ==================== 运行时权限覆盖 ====================
@@ -1030,6 +1037,191 @@ class CommandManager:
             self._cfg_ref.delete("command_permissions")
         return True
 
+    # ==================== 运行时命令别名 ====================
+    #
+    # 别名不是「另一条命令」，而是 `_commands` 里指向同一个 handler 的另一个键：
+    # 这样权限、schema、作用域、归属标签天然共用一份，卸载时也一起回收。
+
+    def _load_alias_overrides(self) -> None:
+        """从配置读别名表；结构不对的条目只告警不采纳。"""
+        raw = self._cfg_ref.get("command_aliases", {}) if self._cfg_ref else {}
+        table: dict[str, list[str]] = {}
+        if isinstance(raw, dict):
+            for name, values in raw.items():
+                if not isinstance(values, list) or not all(
+                        isinstance(v, str) for v in values):
+                    _cmd_logger().warning(
+                        "command_aliases.%s 不是字符串数组（%r），已忽略", name, values)
+                    continue
+                table[str(name)] = [str(v).strip() for v in values if str(v).strip()]
+        elif raw:
+            _cmd_logger().warning("command_aliases 不是对象（%r），已忽略", raw)
+        self._alias_overrides = table
+
+    def _save_alias_overrides(self) -> bool:
+        """整表写回配置；空表删键（别留空对象）。返回 False = 未持久化。"""
+        if self._cfg_ref is None:
+            return False
+        if self._alias_overrides:
+            self._cfg_ref.set("command_aliases",
+                              {k: list(v) for k, v in self._alias_overrides.items()})
+        else:
+            self._cfg_ref.delete("command_aliases")
+        return True
+
+    def _drop_alias_entries(self, handler: "CommandHandler",
+                            keep: Iterable[str] = ()) -> None:
+        """删掉所有「指向这个 handler」的键（保留规范名与 `keep` 里的别名）。"""
+        canonical = handler.name
+        keep = set(keep)
+        for key in [k for k, h in self._commands.items()
+                    if h is handler and k != canonical and k not in keep]:
+            self._commands.pop(key, None)
+
+    def _apply_alias_override(self, name: str, handler: "CommandHandler") -> None:
+        """把「配置里的别名」套到刚登记的命令上（所有登记路径都会调它）。
+
+        配置存在 → 以配置为**全集**（可以清空插件代码里声明的别名）；
+        不存在 → 用 `register(aliases=…)` 的声明值。
+        """
+        declared = list(handler.aliases or [])
+        configured = self._alias_overrides.get(name)
+        effective = list(configured) if configured is not None else declared
+        handler.aliases = effective
+        self._drop_alias_entries(handler, keep=effective)
+        for alias in effective:
+            self._commands[alias] = handler
+
+    @staticmethod
+    def _valid_alias_name(alias: str, max_len: int) -> str:
+        """别名合法性：非空、长度受限、字母开头（与命令名同一条规则）。"""
+        alias = str(alias or "").strip()
+        if not alias:
+            return "别名不能为空"
+        if len(alias) > max_len:
+            return f"别名过长（最多 {max_len} 字符）"
+        if not re.fullmatch(r"[A-Za-z][\w-]*", alias):
+            return f"别名 {alias!r} 非法：字母开头，只能含字母/数字/下划线/连字符"
+        return ""
+
+    def _resolve_alias_target(self, raw: str) -> tuple[str, "CommandHandler"] | tuple[None, str]:
+        """解析别名要指向的命令；失败返回 `(None, 原因)`。"""
+        target = (raw or "").strip().lstrip("/")
+        if not target:
+            return None, "缺少目标命令"
+        resolved = self.find_command(target)
+        if resolved is None:
+            return None, f"未知命令: /{target}"
+        canonical, handler = resolved
+        if "." in canonical:
+            return None, (f"/{canonical} 是子命令；别名只支持顶层命令"
+                          "（可给父命令起别名，或用 /help 查子命令）")
+        if handler.subcommands:
+            return None, (f"/{canonical} 是命令组，本体不执行动作；"
+                          "请给具体子命令起别名（暂不支持）或用它自己的子命令")
+        return canonical, handler
+
+    def alias_overrides(self) -> dict[str, list[str]]:
+        """别名表副本（诊断/测试用；改动请走 /alias 的 add/del/set/move）。"""
+        return {k: list(v) for k, v in self._alias_overrides.items()}
+
+    def add_alias(self, alias: str, target: str) -> tuple[bool, str]:
+        """给命令加一个别名（校验 → 写入 → 落盘）。"""
+        reason = self._valid_alias_name(alias, self.parser.max_cmd_len)
+        if reason:
+            return False, reason
+        resolved, handler = self._resolve_alias_target(target)
+        if resolved is None:
+            return False, handler
+        canonical = resolved
+        if alias == canonical:
+            return False, f"别名与命令名相同（/{canonical}），无需设置"
+        occupied = self._commands.get(alias)
+        if occupied is not None:
+            if occupied is handler:
+                return False, f"/{canonical} 已经有别名 /{alias}"
+            other = occupied.name or alias
+            return False, (f"/{alias} 已被 /{other} 占用（命令名或别的别名先占），"
+                           "换一个别名，或先删掉它")
+        effective = list(handler.aliases or [])
+        effective.append(alias)
+        self._alias_overrides[canonical] = effective
+        self._apply_alias_override(canonical, handler)
+        saved = self._save_alias_overrides()
+        _cmd_logger().info("命令别名：/%s 新增 /%s", canonical, alias)
+        tail = "" if saved else "（⚠️ 未持久化：配置未初始化，重启即失效）"
+        return True, f"✅ 已给 /{canonical} 添加别名 /{alias}{tail}"
+
+    def remove_alias(self, alias: str) -> tuple[bool, str]:
+        """删除一个别名（不能删命令名；插件代码声明的别名也会被压制）。"""
+        alias = str(alias or "").strip().lstrip("/")
+        handler = self._commands.get(alias)
+        if handler is None:
+            return False, f"没有这个命令或别名: /{alias}"
+        canonical = handler.name or alias
+        if alias == canonical:
+            return False, (f"/{alias} 是命令名不是别名；要禁用命令用 "
+                           "/pause command <名>")
+        effective = [a for a in (handler.aliases or []) if a != alias]
+        self._alias_overrides[canonical] = effective
+        self._apply_alias_override(canonical, handler)
+        saved = self._save_alias_overrides()
+        _cmd_logger().info("命令别名：/%s 删除 /%s", canonical, alias)
+        tail = "" if saved else "（⚠️ 未持久化：配置未初始化）"
+        return True, f"✅ 已删除 /{canonical} 的别名 /{alias}{tail}"
+
+    def set_aliases(self, target: str, aliases: list[str]) -> tuple[bool, str]:
+        """整体替换某个命令的别名集合（空列表 = 清空，含代码声明值）。"""
+        resolved, handler = self._resolve_alias_target(target)
+        if resolved is None:
+            return False, handler
+        canonical = resolved
+        cleaned: list[str] = []
+        for alias in aliases:
+            reason = self._valid_alias_name(alias, self.parser.max_cmd_len)
+            if reason:
+                return False, reason
+            if alias == canonical:
+                return False, f"别名不能等于命令名 /{canonical}"
+            occupied = self._commands.get(alias)
+            if occupied is not None and occupied is not handler:
+                return False, (f"/{alias} 已被 /{occupied.name or alias} 占用")
+            if alias not in cleaned:
+                cleaned.append(alias)
+        self._alias_overrides[canonical] = cleaned
+        self._apply_alias_override(canonical, handler)
+        saved = self._save_alias_overrides()
+        _cmd_logger().info("命令别名：/%s = %s", canonical, cleaned)
+        tail = "" if saved else "（⚠️ 未持久化：配置未初始化）"
+        if not cleaned:
+            return True, f"✅ 已清空 /{canonical} 的全部别名{tail}"
+        return True, (f"✅ /{canonical} 的别名已设为："
+                      + "、".join(f"/{a}" for a in cleaned) + tail)
+
+    def move_alias(self, alias: str, target: str) -> tuple[bool, str]:
+        """把已有别名改指向另一条命令。"""
+        alias = str(alias or "").strip().lstrip("/")
+        old_handler = self._commands.get(alias)
+        if old_handler is None:
+            return False, f"没有这个别名: /{alias}"
+        old_canonical = old_handler.name or alias
+        if alias == old_canonical:
+            return False, f"/{alias} 是命令名不是别名"
+        resolved, _handler = self._resolve_alias_target(target)
+        if resolved is None:
+            return False, str(_handler)
+        # 先从旧命令名下摘掉，否则 add_alias 的「已被占用」检查会挡住自己
+        self._commands.pop(alias, None)
+        ok, message = self.add_alias(alias, target)
+        if not ok:
+            self._commands[alias] = old_handler       # 回滚
+            return False, message
+        old_effective = [a for a in (old_handler.aliases or []) if a != alias]
+        self._alias_overrides[old_canonical] = old_effective
+        self._apply_alias_override(old_canonical, old_handler)
+        self._save_alias_overrides()
+        return True, (f"✅ 别名 /{alias} 已从 /{old_canonical} 改指向 /{resolved}")
+
     def _apply_perm_override(self, name: str, handler: "CommandHandler") -> None:
         """把覆盖表里该命令的值套到 handler 上（所有登记路径都会调它）。"""
         if name not in self._perm_overrides:
@@ -1055,6 +1247,7 @@ class CommandManager:
         """
         self._commands[name] = handler
         self._apply_perm_override(name, handler)
+        self._apply_alias_override(name, handler)
 
     @property
     def perm_overrides(self) -> dict[str, str]:
@@ -1411,8 +1604,10 @@ class CommandManager:
                     return f"事件监听器 {target} 已移除"
                 return f"未找到事件监听器: {target}"
             elif tp == "command":
-                if target in self._commands:
-                    del self._commands[target]
+                removed = self._commands.pop(target, None)
+                if removed is not None:
+                    # 别名与命令共用 handler：不一起删会留下「命令没了但别名还能用」
+                    self._drop_alias_entries(removed)
                     return f"命令 /{target} 已移除"
                 return f"未找到命令: /{target}"
             elif tp == "timer":
@@ -1819,6 +2014,87 @@ class CommandManager:
             usage="userperm <list|get|set|clear> ...", scope="private",
             permission="superuser", permission_manager=self._perm_manager))
 
+        # ---- /alias：命令别名（superuser · 私聊）----
+        #
+        # 别名不是「另一条命令」：它在 `_commands` 里指向同一个 handler，
+        # 所以权限/schema/作用域/归属标签天然共用，卸载时也一起回收。
+        # 配置（config.json 的 `command_aliases`）一旦出现该命令，就是**全集**：
+        # 空列表表示清空，连插件 register(aliases=…) 里声明的也会被压掉。
+
+        def _alias_list(target: str = "") -> str:
+            if target:
+                resolved = self.find_command(target)
+                if resolved is None:
+                    configured = self._alias_overrides.get(target)
+                    if configured is None:
+                        return f"未知命令: /{target}"
+                    return (f"/{target} 未注册，但配置里有别名："
+                            + "、".join(f"/{a}" for a in configured)
+                            + "（用 /alias set 重设，或 /alias del 逐个清）")
+                canonical, handler = resolved
+                aliases = list(handler.aliases or [])
+                if not aliases:
+                    return f"/{canonical} 没有别名"
+                return f"/{canonical} 的别名：" + "、".join(f"/{a}" for a in aliases)
+
+            rows: list[str] = []
+            for canonical, handler in self.iter_handlers():
+                aliases = list(handler.aliases or [])
+                if aliases:
+                    rows.append(f"  /{canonical} → " + "、".join(f"/{a}" for a in aliases))
+            leftover = [name for name in self._alias_overrides
+                        if self._commands.get(name) is None]
+            if not rows and not leftover:
+                return "当前没有命令别名"
+            lines = [f"🔗 命令别名（{len(rows)} 条命令）"]
+            lines += rows
+            if leftover:
+                lines.append("  ⚠️ 配置里有未注册命令的别名（插件卸载/缺失，重装后自动生效）：")
+                for name in leftover:
+                    lines.append(f"    /{name} → "
+                                 + "、".join(f"/{a}" for a in self._alias_overrides[name]))
+            lines.append("\n💡 /alias add <别名> <命令> · del <别名> · "
+                         "set <命令> [别名…] · move <别名> <命令>")
+            return "\n".join(lines)
+
+        def _cmd_alias(packet: CommandPacket):
+            """查看/增删改命令别名（superuser · 私聊）。"""
+            verb = packet.arg(0, "").lower()
+            if verb in ("", "list"):
+                return _alias_list(packet.arg(1, "").lstrip("/"))
+            if verb == "add":
+                if len(packet.args) < 3:
+                    return "用法：/alias add <别名> <命令>"
+                return self.add_alias(packet.arg(1, ""), packet.arg(2, ""))[1]
+            if verb == "del":
+                if len(packet.args) < 2:
+                    return "用法：/alias del <别名>"
+                return self.remove_alias(packet.arg(1, ""))[1]
+            if verb == "set":
+                if len(packet.args) < 2:
+                    return ("用法：/alias set <命令> [别名…]\n"
+                            "（不给别名 = 清空该命令的全部别名）")
+                names = [part.strip() for arg in packet.args[2:]
+                         for part in arg.split(",") if part.strip()]
+                return self.set_aliases(packet.arg(1, ""), names)[1]
+            if verb == "move":
+                if len(packet.args) < 3:
+                    return "用法：/alias move <别名> <新命令>"
+                return self.move_alias(packet.arg(1, ""), packet.arg(2, ""))[1]
+            return ("用法：\n"
+                    "  /alias                       列出全部别名\n"
+                    "  /alias list [命令]           查看某条命令的别名\n"
+                    "  /alias add <别名> <命令>     新增别名\n"
+                    "  /alias del <别名>            删除别名\n"
+                    "  /alias set <命令> [别名…]    整体替换（不给别名=清空）\n"
+                    "  /alias move <别名> <新命令>  改指向")
+
+        self._install_handler("alias", CommandHandler(
+            "alias", _cmd_alias,
+            description="查看/增删改命令别名（superuser 专属）",
+            usage="alias <list|add|del|set|move> ...", scope="private",
+            permission="superuser", permission_manager=self._perm_manager))
+
         # 所有人可见（查询/测试）
         for cmd_name, func, desc in [
             ("ping", _cmd_ping, "延迟测试"),
@@ -1886,9 +2162,10 @@ class CommandManager:
                 existing = self._commands.get(name)
                 if existing and existing.subcommands:
                     handler.subcommands.update(existing.subcommands)
+                # 别名由 `_install_handler` → `_apply_alias_override` 统一登记：
+                # 配置（command_aliases）存在时以配置为全集，所以这里**不能**再
+                # 直接把声明值塞进 _commands（会把「已清空」的别名又加回来）。
                 self._install_handler(name, handler)
-                for alias in (aliases or []):
-                    self._commands[alias] = handler
             return func
         return decorator
 
@@ -2106,7 +2383,12 @@ class CommandManager:
         return text
 
     def unregister(self, name: str) -> bool:
-        return self._commands.pop(name, None) is not None
+        """注销命令（含它名下的别名条目）。"""
+        handler = self._commands.pop(name, None)
+        if handler is None:
+            return False
+        self._drop_alias_entries(handler)
+        return True
 
     def list_commands(self) -> dict[str, CommandHandler]:
         return dict(self._commands)

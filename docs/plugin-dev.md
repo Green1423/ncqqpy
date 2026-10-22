@@ -427,7 +427,13 @@ async def cmd_ban(params, event):
 | `scope` | `str` | `"all"` | `"private"` / `"group"` / `"all"` |
 | `description` | `str` | `""` | 命令描述（在 `/help` 中显示） |
 | `usage` | `str` | `""` | 用法示例（自动从 Schema 生成；子命令同样生效） |
-| `aliases` | `list[str]` | `None` | 别名列表 |
+| `aliases` | `list[str]` | `None` | 别名列表（超管可在运行期用 `/alias` 增删改，配置会接管这里声明的集合） |
+
+> **别名**：`register_command("demo", aliases=["d"])` 之后 `/d` 与 `/demo` 等价
+> （共用同一个 handler，权限/schema 不变）。运行期可用 `/alias add|del|set|move`
+> 管理（仅私聊 + 超管），落盘在 `config.json` 的 `command_aliases`；
+> 配置存在时是该命令别名的**全集**（空列表 = 清空，会压掉代码里的声明值）。
+> 别名只支持顶层命令；命令被 `/stop command` 或插件卸载时，别名条目一起清掉。
 
 ### 4.3.1 占位符记号（全框架统一）
 

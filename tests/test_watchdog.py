@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import os
@@ -2807,6 +2808,551 @@ async def test_portal_search(tmp: Path):
           "🤖" not in txt, txt[:80])
 
 
+async def test_afterclass(tmp: Path):
+    print("\n[25] 第二课堂：JWT 解析/活动归一化/去重基线与推送")
+    from plugins.bupt_news.activity_store import ActivityStore
+    from plugins.bupt_news.dekt import (DektAuthError, DektClient, decode_jwt,
+                                        format_activity, load_token,
+                                        normalize_activity, to_local_time)
+
+    # (a) JWT 只用来取 sub/exp，不校验签名
+    def make_jwt(payload):
+        def b64(obj):
+            raw = json.dumps(obj).encode()
+            return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        return f"{b64({'alg': 'HS256'})}.{b64(payload)}.sig"
+
+    tok = make_jwt({"sub": 2026000000, "exp": 1900000000})
+    check("JWT 解出 sub", decode_jwt(tok).get("sub") == 2026000000, "")
+    check("坏 token 解出空 dict",
+          decode_jwt("garbage") == {} and decode_jwt("") == {}, "")
+    client = DektClient(token=tok)
+    check("client 取到 user_id", client.user_id == "2026000000", client.user_id)
+    check("有 token 时 available", client.available is True, "")
+    # ⚠️ 必须给一个**不存在**的 token_file：默认路径下用户可能真的放了 token，
+    # 那样这条断言就会因为环境而非代码失败。
+    check("无 token 时 unavailable",
+          DektClient(token="", token_file=str(tmp / "no-token.txt")).available
+          is False, "")
+    check("token 走参数优先于文件",
+          load_token(tok, path=str(tmp / "no-such-token")) == tok, "")
+    # 粘贴容错：控制台复制带引号、设置页带 Bearer 前缀、混进换行
+    from plugins.bupt_news.dekt import clean_token
+    check("粘贴带引号能清洗", clean_token(f'"{tok}"') == tok, "")
+    check("粘贴带 Bearer 前缀能清洗", clean_token(f"Bearer {tok}") == tok, "")
+    check("多行粘贴只取 JWT 那行", clean_token(f"token =\n{tok}\n") == tok, "")
+
+    # 热更新：覆盖 token.txt 即可，不需要重启；内容不变不算变化
+    tok_file = tmp / "token-hot.txt"
+    tok_file.write_text(tok, encoding="utf-8")
+    hot = DektClient(token_file=str(tok_file))
+    check("从文件载入 token", hot.available is True and hot.user_id == "2026000000", "")
+    check("内容没变时不报变化", hot.reload_token() is False, "")
+    newer = make_jwt({"sub": 2026000000, "exp": 1900000777})   # 必须与上面的不同
+    tok_file.write_text(f'"{newer}"\n', encoding="utf-8")     # 带引号也能用
+    check("★ 覆盖 token.txt 即生效（无需重启）", hot.reload_token() is True, "")
+    check("热更新后仍是有效 JWT", hot.available is True, "")
+    check("token 过期时间可读", hot.expiry() is not None, "")
+
+    # (b) 活动归一化：字段别名 + 时间戳 + 枚举翻译
+    norm = normalize_activity({
+        "id": 42, "title": "实验室开放日", "place": "沙河 S203", "area": 1,
+        "class_id": 4, "org_name": "计算机学院", "demands": 9,
+        "start_t_ms": 1791000000000, "end_t_ms": 1791007200000,
+        "apply_start_t_ms": 1790000000000, "apply_end_t_ms": 1790900000000,
+    }, {"4": "学术科创"})
+    check("活动 id 归一化", norm["id"] == "42", str(norm["id"]))
+    check("活动标题/地点", norm["title"] == "实验室开放日" and norm["place"] == "沙河 S203",
+          "")
+    check("area 枚举翻成校区名", norm["area"] == "沙河", str(norm["area"]))
+    check("class_id 翻成分类名", norm["class_name"] == "学术科创", "")
+    check("demands 位包含报名/频道",
+          norm["can_apply"] is True and norm["demands"] == 9, str(norm["demands"]))
+    check("毫秒时间戳转本地时间",
+          norm["start"] == "2026-10-03 12:00", str(norm["start"]))
+    check("秒级时间戳也能转", to_local_time(1791000000).startswith("2026-10-03"),
+          to_local_time(1791000000))
+    check("非时间戳原样返回", to_local_time("待定") == "待定", "")
+    # 真实格式是 ISO8601 UTC（`2026-10-26T07:00:00Z`），要转成本机时区
+    iso = to_local_time("2026-10-26T07:00:00Z")
+    check("ISO8601 转本地时间（日期不变、带时分）",
+          iso.startswith("2026-10-26") and len(iso) == 16, iso)
+    check("★ 1970 哨兵视为没有时间",
+          to_local_time("1970-01-01T00:00:00Z") == "", "")
+
+    # 按**真实响应**核对过的字段名（不是猜的）：activity_class / activity_*_time
+    real = normalize_activity({
+        "id": 13452, "name": "音乐实践工作坊", "activity_class": 30,
+        "location": "学生活动中心201教室", "attend_limit": 20, "demands": 23,
+        "area": 1, "activity_start_time": "2026-10-26T07:00:00Z",
+        "activity_end_time": "2026-10-26T08:30:30Z",
+        "signup_start_time": "1970-01-01T00:00:00Z",
+        "signup_end_time": "2026-10-26T08:00:00Z",
+    }, {"30": "文艺活动"})
+    check("真实字段 activity_class 映射分类", real["class_name"] == "文艺活动",
+          repr(real["class_name"]))
+    check("真实字段 location/attend_limit",
+          real["place"] == "学生活动中心201教室" and real["attend_limit"] == 20,
+          f'{real["place"]}/{real["attend_limit"]}')
+    check("真实字段 activity_*_time 解析", real["start"] != "" and real["end"] != "",
+          f'{real["start"]}/{real["end"]}')
+    check("报名起点是哨兵时不显示", real["apply_start"] == "",
+          repr(real["apply_start"]))
+    check("报名终点正常显示", real["apply_end"] != "", repr(real["apply_end"]))
+    check("demands=23 含报名位", real["can_apply"] is True, "")
+    # 别名：不同字段名都能命中
+    alt = normalize_activity({"activity_id": 7, "name": "别名活动",
+                             "enroll_end_t_ms": 1790900000000, "address": "教三"})
+    check("别名表能命中 id/标题/地址",
+          alt["id"] == "7" and alt["title"] == "别名活动" and alt["place"] == "教三",
+          f'{alt["id"]}/{alt["title"]}/{alt["place"]}')
+    check("别名表能命中报名截止", alt["apply_end"] != "", str(alt["apply_end"]))
+
+    text = format_activity(norm)
+    check("推送文案含标题/地点/链接",
+          "实验室开放日" in text and "沙河 S203" in text and "/activity/42" in text,
+          text[:80])
+    check("推送文案标题不用 🎪（消息头已用）", text.startswith("▸ "), text[:12])
+
+    # (c) 存储：去重、已推送、积压
+    store = ActivityStore(str(tmp / "acts" / "activities.json"), max_records=5)
+    first = store.upsert([{"id": "1", "title": "A"}, {"id": "2", "title": "B"}])
+    check("首次入库返回全部为新增", [r["id"] for r in first] == ["1", "2"], "")
+    again = store.upsert([{"id": "1", "title": "A改"}, {"id": "3", "title": "C"}])
+    check("★ 重复活动不算新增（只报新出现的）",
+          [r["id"] for r in again] == ["3"], str([r["id"] for r in again]))
+    check("重复活动会就地刷新内容",
+          next(r for r in store.all_records() if r["id"] == "1")["title"] == "A改", "")
+    check("未推送的全部在积压里",
+          [r["id"] for r in store.backlog()] == ["1", "2", "3"], "")
+    store.mark_pushed(["1"])
+    check("★ 标记已推送后退出积压",
+          [r["id"] for r in store.backlog()] == ["2", "3"], "")
+    reloaded = ActivityStore(str(tmp / "acts" / "activities.json"), max_records=5)
+    check("★ 积压跨实例保持（免打扰补发的基础）",
+          [r["id"] for r in reloaded.backlog()] == ["2", "3"], "")
+    check("冗余记录按上限裁剪", len(reloaded.all_records()) <= 5, "")
+
+    # (d) 独立绑定：一个绑定 = 一个目标 + 它自己的 JWT
+    from napcat.command import CommandManager
+    from napcat.models import MessageEvent
+    from napcat.permission import PermissionManager
+    from plugins.bupt_news.main import BuptNewsPlugin
+
+    class _FakeApi:
+        def __init__(self):
+            self.sent = []
+
+        async def send_group_msg(self, gid, chain):
+            self.sent.append(("group", str(gid), chain))
+
+        async def send_private_msg(self, uid, chain, group_id=None):
+            self.sent.append(("user", str(uid), chain))
+
+    class _FakeDekt:
+        available = True
+
+        def __init__(self, acts):
+            self.acts = list(acts)
+
+        def reload_token(self):
+            return False
+
+        def expiry(self):
+            return None
+
+        async def me(self):
+            return {"user": {}, "digest": "D"}
+
+        async def activities(self, **_kw):
+            return list(self.acts)
+
+        async def activity_classes(self):
+            return [{"id": 1, "name": "文体活动"}]
+
+    def act(i, title):
+        return {"id": i, "name": title, "location": "P", "area": 1,
+                "activity_class": 1, "demands": 23,
+                "activity_start_time": "2026-10-26T07:00:00Z"}
+
+    data_dir = tmp / "dekt"
+    api = _FakeApi()
+    perm = PermissionManager()
+    perm.set_superusers([1])
+    plugin = BuptNewsPlugin(api=api, event_bus=None, timer=None,
+                            cmd_manager=CommandManager(perm_manager=perm),
+                            perm_manager=perm, file_manager=None,
+                            logger=_logger(), groups=None,
+                            cfg=_FakeCfg({"plugins": {"bupt_news": {
+                                "data_dir": str(data_dir), "groups": [999],
+                                "afterclass": {"enabled": True,
+                                               "max_per_round": 2}}}}))
+    await plugin.on_load()
+    plugin._in_quiet_hours = lambda now=None: False
+
+    def make_binding(kind, target, client):
+        return {"name": f"{kind}{target}", "kind": kind, "target": target,
+                "token_file": f"{plugin._data_dir}/t-{kind}.txt",
+                "client": client,
+                "store": ActivityStore(
+                    plugin._binding_store_path(kind, target))}
+
+    plugin._act_bindings = [
+        make_binding("group", 111, _FakeDekt([act(1, "群1活动")])),
+        make_binding("user", 222, _FakeDekt([act(2, "私聊A"), act(3, "私聊B")])),
+    ]
+
+    # 首轮：每个绑定各自建基线，一条都不发
+    check("★ 每个绑定各自建基线、一条都不发",
+          await plugin._sync_activities() == (3, 0) and api.sent == [],
+          f"sent={api.sent}")
+    check("基线后各绑定积压都空",
+          all(not b["store"].backlog() for b in plugin._act_bindings), "")
+
+    # 每绑定各来一条新的 → 各自发到**自己的**目标
+    plugin._act_bindings[0]["client"].acts.append(act(10, "群1新活动"))
+    plugin._act_bindings[1]["client"].acts.append(act(20, "私聊新活动"))
+    check("★ 两个绑定各推 1 条", await plugin._sync_activities() == (2, 2),
+          str(len(api.sent)))
+    targets = sorted((k, t) for k, t, _ in api.sent)
+    check("★ 各绑定只发自己的目标", targets == [("group", "111"),
+                                              ("user", "222")], str(targets))
+    check("★ 活动不发给通知的 groups（999）",
+          all(t != "999" for _, t, _ in api.sent), str(targets))
+    texts = ["".join(x.get("data", {}).get("text", "") for x in ch.build()
+                     if x.get("type") == "text") for _, _, ch in api.sent]
+    check("各绑定只收到自己的活动",
+          any("群1新活动" in t and "私聊新活动" not in t for t in texts)
+          and any("私聊新活动" in t and "群1新活动" not in t for t in texts), "")
+    check("活动推送不带 @全体成员",
+          all("@全体成员" not in t for t in texts), "")
+
+    # 去重是**按绑定**的：同一个活动 id 在另一个绑定里仍算新
+    plugin._act_bindings[1]["client"].acts.append(act(10, "群1新活动"))
+    await plugin._sync_activities()
+    check("★ 去重按绑定隔离（同 id 在别的绑定算新）",
+          plugin._act_bindings[1]["store"].is_pushed(10) is True, "")
+
+    # 单轮上限也是按绑定
+    plugin._act_bindings[0]["client"].acts += [act(30, "a"), act(31, "b"),
+                                              act(32, "c")]
+    before = len(api.sent)
+    await plugin._sync_activities()
+    got = [t for k, t, _ in api.sent[before:]]
+    check("★ 单轮上限按绑定生效（3 条新只推 2）", len(got) == 1, str(len(got)))
+    check("剩余 1 条留在该绑定积压",
+          len(plugin._act_bindings[0]["store"].backlog()) == 1,
+          str(len(plugin._act_bindings[0]["store"].backlog())))
+
+    # 免打扰：只入库不发送
+    before = len(api.sent)
+    plugin._in_quiet_hours = lambda now=None: True
+    plugin._act_bindings[0]["client"].acts.append(act(40, "静默期活动"))
+    await plugin._sync_activities()
+    check("★ 免打扰期间不发送", len(api.sent) == before, str(len(api.sent)))
+    check("免打扰期间入库成积压",
+          any(r["id"] == "40" for r in plugin._act_bindings[0]["store"].backlog()),
+          "")
+    plugin._in_quiet_hours = lambda now=None: False
+    await plugin._sync_activities()
+    check("★ 醒来后补发该绑定的积压", len(api.sent) > before, "")
+
+    # 一个绑定坏掉不影响另一个
+    class _DeadDekt:
+        available = True
+
+        def reload_token(self):
+            return False
+
+        def expiry(self):
+            return None
+
+        async def me(self):
+            raise DektAuthError("token 无效或已过期")
+
+    plugin._act_bindings[0]["client"] = _DeadDekt()
+    plugin._act_bindings[1]["client"].acts.append(act(50, "另一个绑定的新活动"))
+    before = len(api.sent)
+    await plugin._sync_activities()
+    check("★ 一个绑定 token 失效不影响另一个",
+          len(api.sent) == before + 1, str(len(api.sent) - before))
+
+    # 状态行：多绑定汇总
+    line = plugin._afterclass_status_line()
+    check("状态行含绑定数与活动数",
+          "2 个绑定" in line and "条活动" in line, line)
+
+    # (e) 绑定表：targets 归一化 + 活动绑定构建
+    plugin.config.set("targets", {
+        "groups": {"123456": {"message": True, "event": True,
+                              "token_file": str(tmp / "g.txt")},
+                   "0": {"message": True},            # 非法 id → 丢
+                   "abc": {"message": True}},          # 非数字 → 丢
+        "users": {"654321": {"message": False, "event": True},
+                  "-5": {"message": True}},            # 负数 → 丢
+    })
+    t = plugin._targets()
+    check("targets 只留下合法 id",
+          sorted(t["groups"]) == [123456] and sorted(t["users"]) == [654321],
+          f"groups={sorted(t['groups'])} users={sorted(t['users'])}")
+    check("event 绑定的数量正确",
+          [(k, i) for k, i, _ in plugin._event_targets()]
+          == [("group", 123456), ("user", 654321)],
+          str([(k, i) for k, i, _ in plugin._event_targets()]))
+    check("只把 message=true 的当推送目标",
+          plugin._message_targets() == ([123456], []),
+          str(plugin._message_targets()))
+
+    built = plugin._build_activity_bindings(
+        {"base": "https://dekt.bupt.edu.cn", "max_records": 10})
+    check("活动绑定只取 event=true 的",
+          [(b["kind"], b["target"]) for b in built]
+          == [("group", 123456), ("user", 654321)],
+          str([(b["kind"], b["target"]) for b in built]))
+    check("显式 token_file 生效",
+          built[0]["token_file"] == str(tmp / "g.txt"), built[0]["token_file"])
+    check("没配 token_file 时落到数据目录",
+          built[1]["token_file"] == os.path.join(
+              plugin._data_dir, "dekt-tokens", "user-654321.txt"),
+          built[1]["token_file"])
+
+    # 旧配置兜底：groups/users/binding/afterclass.bindings 合成出 targets
+    plugin.config.set("targets", None)
+    plugin.config.set("groups", [111])
+    plugin.config.set("users", [222])
+    plugin.config.set("binding", {"groups": [333], "users": [444]})
+    plugin.config.set("afterclass", {"enabled": True, "bindings": [
+        {"group": 111, "token_file": str(tmp / "legacy.txt")}]})
+    t2 = plugin._targets()
+    check("★ 旧配置能合成 targets（推送目标 + 白名单 + 活动绑定）",
+          sorted(t2["groups"]) == [111, 333] and sorted(t2["users"]) == [222, 444],
+          f"groups={sorted(t2['groups'])} users={sorted(t2['users'])}")
+    check("旧活动绑定映射成 event=true 并保留 token 文件",
+          t2["groups"][111]["event"] is True
+          and t2["groups"][111]["token_file"] == str(tmp / "legacy.txt"),
+          str(t2["groups"][111]))
+    check("白名单条目只给准入、不推通知",
+          t2["groups"][333]["message"] is False, str(t2["groups"][333]))
+    plugin.config.set("groups", [])
+    plugin.config.set("users", [])
+    plugin.config.set("binding", {"groups": [], "users": []})
+    plugin.config.set("afterclass", {"enabled": True})
+
+    # 没有绑定 / 关闭时的状态行
+    plugin._act_bindings = []
+    check("没有绑定时状态行给出提示",
+          "没有可用绑定" in plugin._afterclass_status_line(),
+          plugin._afterclass_status_line())
+    plugin.config.set("afterclass", {"enabled": False})
+    check("关闭时状态行显示未开启",
+          "未开启" in plugin._afterclass_status_line(),
+          plugin._afterclass_status_line())
+
+    # (f) list 的 scope：默认只有置顶+通知，--scope 才出活动
+    plugin.config.set("afterclass", {"enabled": True})
+    plugin._act_bindings = [
+        make_binding("group", 111, _FakeDekt([])),
+        make_binding("user", 222, _FakeDekt([])),
+    ]
+    for idx, (b, recs) in enumerate(zip(plugin._act_bindings, (
+            [{"id": "900", "title": "群活动", "start": "2026-10-26 15:00", "ts": 2}],
+            [{"id": "901", "title": "私聊活动", "start": "2026-10-27 09:00", "ts": 3}]))):
+        b["store"].upsert(recs)
+        b["store"].mark_pushed([r["id"] for r in recs])
+    for i in (1, 2):
+        plugin._store.add_notice({
+            "key": f"n{i}", "newsid": str(7000 + i), "treeid": "1154",
+            "title": f"通知{i}", "body": "b", "summary": f"摘要{i}",
+            "summary_ai": True, "student_ai": True, "for_students": True,
+            "images": [], "tables": []})
+    plugin._register_commands()
+
+    # 插件把构造时传入的 manager 存在 `self.cmds`；复用同一个实例
+    cmds = plugin.cmds
+    plugin._register_commands()
+
+    async def say(text):
+        r = await cmds.handle(
+            MessageEvent(message_type="private", user_id=1, message=text))
+        return r if isinstance(r, str) else str(r)
+
+    out = await say("/buptnews list")
+    # 注意：list 每行显示的是**摘要**（不是标题），所以这里断言 "摘要1"
+    check("★ 默认 list 只有置顶+通知（不含活动）",
+          "摘要1" in out and "🎪 第二课堂" not in out, out[:160])
+    check("默认 list 提示可用 --scope=acts",
+          "--scope=acts" in out, out[-160:])
+
+    out = await say("/buptnews list --scope=acts")
+    check("★ --scope=acts 只出活动",
+          "🎪 第二课堂" in out and "摘要1" not in out, out[:200])
+    check("多绑定时标出活动归属",
+          "[group111]" in out or "[user222]" in out, out[:200])
+    check("活动按时间倒序（最新在前）",
+          out.index("901") < out.index("900"), out[:200])
+
+    out = await say("/buptnews list --scope=all")
+    check("★ --scope=all 同时有通知与活动",
+          "摘要1" in out and "🎪 第二课堂" in out, out[:200])
+
+    out = await say("/buptnews list -a")
+    check("-a 简写等价于 --scope=acts",
+          "🎪 第二课堂" in out and "摘要1" not in out, out[:160])
+
+    out = await say("/buptnews list 2")
+    check("页码参数仍生效", "第 2/1 页" in out or "第 1/1 页" in out, out[:120])
+    plugin._act_bindings = []
+
+
+async def test_targets_commands(tmp: Path):
+    print("\n[26] 绑定命令：add/set/del/targets + dektoken 权限")
+    from napcat.command import CommandManager
+    from napcat.models import GroupMember, GroupMemberRole, MessageEvent
+    from napcat.permission import PermissionManager
+    from plugins.bupt_news.main import BuptNewsPlugin
+
+    def jwt(sub):
+        def b64(obj):
+            raw = json.dumps(obj).encode()
+            return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        return f"{b64({'alg': 'HS256'})}.{b64({'sub': sub, 'exp': 1900000000})}.sig"
+
+    class _Api:
+        def __init__(self):
+            self.roles = {}
+
+        async def get_group_member_info(self, gid, uid):
+            role = self.roles.get((int(gid), int(uid)))
+            if role is None:
+                raise RuntimeError("机器人不在该群")
+            return GroupMember(group_id=int(gid), user_id=int(uid),
+                               nickname="x", role=GroupMemberRole(role))
+
+        async def send_group_msg(self, *a, **k):
+            return {}
+
+        async def send_private_msg(self, *a, **k):
+            return {}
+
+    data_dir = tmp / "targets-cmd"
+    perm = PermissionManager()
+    perm.set_superusers([1])
+    cmds = CommandManager(perm_manager=perm)
+    api = _Api()
+    plugin = BuptNewsPlugin(api=api, event_bus=None, timer=None, cmd_manager=cmds,
+                            perm_manager=perm, file_manager=None, logger=_logger(),
+                            groups=None, cfg=_FakeCfg({"plugins": {"bupt_news": {
+                                "data_dir": str(data_dir), "enabled": False,
+                                "afterclass": {"enabled": True}}}}))
+    await plugin.on_load()
+    plugin._register_commands()
+
+    async def say(text, uid=1):
+        r = await cmds.handle(MessageEvent(message_type="private", user_id=uid,
+                                          message=text))
+        return r if isinstance(r, str) else str(r)
+
+    # (a) add：一项绑定 = 准入 + 两个开关
+    out = await say("/buptnews add user 100000555")
+    spec = plugin._targets()["users"].get(100000555) or {}
+    check("★ add 建立绑定（默认推通知、不推活动）",
+          spec.get("message") is True and spec.get("event") is False,
+          f"{spec} | {out[:60]}")
+    check("★ 绑定即准入：add 之后该用户可私聊用命令",
+          plugin.check_access(MessageEvent(message_type="private",
+                                           user_id=100000555, message="")))
+    before = len(plugin._targets()["users"])
+    await say("/buptnews add user 100000555")
+    check("重复 add 幂等（不新增条目）",
+          len(plugin._targets()["users"]) == before, str(before))
+
+    await say("/buptnews add user 100000666 event=on message=off")
+    spec = plugin._targets()["users"].get(100000666) or {}
+    check("add 能一次给两个开关", spec.get("event") is True
+          and spec.get("message") is False, str(spec))
+    _, bad = await say("/buptnews add user 100000777 event=看情况")
+    check("非法的开关值有明确提示", "认不出" in bad, bad[:80])
+
+    # (b) set：只改给了的开关
+    await say("/buptnews set user 100000555 event=on")
+    check("set 单开活动推送",
+          plugin._targets()["users"][100000555]["event"] is True,
+          str(plugin._targets()["users"][100000555]))
+    check("set 不动没给的开关（message 仍为 True）",
+          plugin._targets()["users"][100000555]["message"] is True, "")
+    out = await say("/buptnews set user 100000555")
+    check("set 不给开关时提示用法而不改",
+          "没有要改的开关" in out, out[:60])
+    out = await say("/buptnews set user 999999999 message=off")
+    check("set 未绑定的目标给出提示", "还没有绑定" in out, out[:60])
+
+    # (c) dektoken：user 侧权限
+    out = await say(f"/buptnews dektoken user {jwt(100000555)}", 100000999)
+    check("★ 未绑定用户只能得到说明、不能设 token",
+          "还没有绑定" in out, out[:60])
+    await say("/buptnews set user 100000666 event=off")
+    out = await say(f"/buptnews dektoken user {jwt(100000666)}", 100000666)
+    check("★ 活动未开启时拒绝设 token", "event=off" in out, out[:60])
+    await say("/buptnews set user 100000666 event=on")
+    out = await say(f"/buptnews dektoken user {jwt(100000777)}", 100000666)
+    check("★ 粘别人的 token 被拒（sub 校验）", "不是你的" in out, out[:70])
+    out = await say(f"/buptnews dektoken user {jwt(100000666)}", 100000666)
+    check("★ 自己的 token 可保存并立即生效",
+          "已保存" in out and any(b["kind"] == "user"
+                                 and b["target"] == 100000666
+                                 and b["client"].available
+                                 for b in plugin._act_bindings), out[:80])
+
+    # (d) dektoken：group 侧权限
+    await say("/buptnews add group 100000777 event=on")
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000666)
+    check("★ 机器人不在群 → 拒绝", "群主或管理员" in out, out[:70])
+    api.roles[(100000777, 100000666)] = "member"
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000666)
+    check("★ 普通群成员 → 拒绝", "群主或管理员" in out, out[:70])
+    api.roles[(100000777, 100000666)] = "admin"
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000666)
+    check("★ 群管理员 → 允许", "已保存" in out, out[:70])
+    api.roles[(100000777, 100000888)] = "owner"
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)}", 100000888)
+    check("★ 群主 → 允许", "已保存" in out, out[:70])
+    out = await say(f"/buptnews dektoken group 100000777 {jwt(1)} 多了一个参数", 100000888)
+    check("group 形态参数多了会报用法", "用法" in out, out[:60])
+
+    # token 文件落在数据目录且权限收紧
+    tokens = sorted(Path(data_dir, "dekt-tokens").glob("*.txt"))
+    check("token 写进数据目录", len(tokens) >= 2, str(tokens))
+    check("★ token 文件权限 0600",
+          all(f.stat().st_mode & 0o777 == 0o600 for f in tokens),
+          str([oct(f.stat().st_mode & 0o777) for f in tokens]))
+
+    # (e) del：连带删掉数据目录里的 token
+    user_tok = plugin._token_path("user", 100000666,
+                                  plugin._target("user", 100000666))
+    out = await say("/buptnews del user 100000666")
+    check("★ del 移除绑定并删除 token 文件",
+          100000666 not in plugin._targets()["users"]
+          and not os.path.exists(user_tok), f"{out[:40]} exists={os.path.exists(user_tok)}")
+    check("del 后立即失去准入",
+          not plugin.check_access(MessageEvent(message_type="private",
+                                             user_id=100000666, message="")))
+
+    # (f) targets 展示开关
+    out = await say("/buptnews targets")
+    check("targets 标出通知/活动状态",
+          "通知" in out and "活动" in out and "缺token" not in out.split("群（")[0],
+          out[:200])
+
+    # (g) 非超管不能动绑定
+    out = await say("/buptnews add user 100000999", 100000555)
+    check("★ 非超管不能 add",
+          100000999 not in plugin._targets()["users"]
+          and isinstance(out, tuple), repr(out)[:60])
+    out = await say("/buptnews dektoken user " + jwt(100000555), 100000555)
+    check("★ dektoken 不因非超管而被拦（命令内部判定）",
+          not isinstance(out, tuple), repr(out)[:60])
+
+
 async def _cleanup_artifacts():
     for stale in (ROOT / "napcat" / "data").glob("qrcode_sent_*.png"):
         try:
@@ -2847,6 +3393,8 @@ async def main():
     await test_table_to_image(tmp)
     await test_pin_and_search(tmp)
     await test_portal_search(tmp)
+    await test_afterclass(tmp)
+    await test_targets_commands(tmp)
     await _cleanup_artifacts()
     print(f"\n===== 通过 {PASSED} 项，失败 {FAILED} 项 =====")
     return 1 if FAILED else 0

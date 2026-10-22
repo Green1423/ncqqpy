@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -23,6 +23,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_plugin_ws_decoupling.py` | 生命周期与 WebSocket 解耦（重连不重载插件） |
 | `test_userperm.py` | 用户级权限（全局/群内覆盖、优先级、群角色默认 admin、持久化） |
 | `test_public_api.py` | 公开 API 分类（子模块导入 / 懒加载 / 兼容层） |
+| `test_command_alias.py` | 命令别名（增删改查 / 持久化 / 热重载重放 / 生命周期清理） |
 
 ## 依赖插件的用例会自动跳过
 
