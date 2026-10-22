@@ -52,7 +52,7 @@
 12. [完整插件示例](#十二完整插件示例)
 13. [热重载](#十三热重载)
     - [13.1 从 GitHub 装卸插件（`plugin_manager`）](#131-从-github-装卸插件plugin_manager)
-14. [插件包结构](#十四插件包结构)
+14. [插件包结构](#十四插件包结构注册与逻辑分离)
     - [14.1 目录](#141-目录)
     - [14.2 注册：`plugin.py`（没有逻辑）](#142-注册pluginpy没有逻辑)
     - [14.3 逻辑：`commands/chat.py`](#143-逻辑commandschatpy)
@@ -215,7 +215,7 @@ class ReportPlugin(PluginBase):
 | `self.perm` | `PermissionManager` | 权限管理器 |
 | `self.files` | `FileManager` | 文件管理器 |
 | `self.logger` | `Logger` | Python 标准 Logger |
-| `self.errors` | `ErrorReporter` | **错误反馈器**：`render()` / `report()` / `log()`，见 [§十五](#十五错误处理与用户反馈) |
+| `self.errors` | `ErrorReporter` | **错误反馈器**：`render()` / `report()` / `log()`，见 [§十五](#十六错误处理与用户反馈) |
 | `self.deps` | `_DepsProxy` | **依赖访问**：`get()` / `has()` / `enabled()` / `require()`，见 [§1.3](#13-声明依赖别的插件必需--可选) |
 | `self._groups` | `GroupBinding` | 群组绑定管理器 |
 | `self.client` | `NapCatClient` | 主客户端（**只读**：连接状态、`launcher` 结果；注册回调请用 `self.on_ws_*`，见 [§2.2](#22-读取连接状态--拉起结果selfclient)） |
@@ -455,6 +455,19 @@ async def cmd_ban(params, event):
   （框架侧 `render_help()` 只在真的渲染了占位符时才追加，命令组不要自行再加一次。）
 - 报错文案里的参数提示也要用同一记号（如 `请指定群号: /bind <群号>`）。
 
+**用法不足 / 写错时不要自己拼用法提示。** 规范是"命令组 + 子命令，且子命令有参数时
+重定向到 `/help <命令组> <子命令>`"：
+
+| 情况 | 谁负责 | 插件要做什么 |
+|------|--------|--------------|
+| 必填参数缺失/类型不对（Schema 校验失败） | 框架自动回「⚠️ 用法不正确 + 该子命令帮助页」 | 什么都不用做 |
+| **可变参数**（`VariadicField` 不参与必填校验）内容不合法 | 同上，但框架不知道 | `return ("_schema_error", "原因")` |
+| 裸调命令组（`/cmd`） | 框架重定向到 `/help cmd` | 命令组本体**不要写函数体**（写了也不会运行） |
+
+`("_schema_error", 原因)` 是框架 `CommandManager.handle()` 认的哨兵：用户会看到
+「⚠️ 用法不正确：<原因>」外加**完整的帮助页**（用法行、参数表、默认值）。
+手写 `💡 用法：/x add group <群号>` 这类提示会与 Schema 漂移，且拿不到参数表 —— 不要写。
+
 ```python
 from napcat.command import PLACEHOLDER_LEGEND   # 需要手写时从这里取
 from napcat.command import build_usage
@@ -488,7 +501,7 @@ async def cmd_ban(params, event):
 > ⚠️ **签名写错不会静默。** 例如无 schema 的命令写成
 > `async def cmd_ping(params, event)`：`params` 拿不到值 → 实参为空 → 调用时
 > `TypeError`。框架把它包成 `PluginRuntimeError`：日志里有命令名 + 完整 traceback，
-> 用户侧收到一句带错误编号的提示（见 [§十五](#十五错误处理与用户反馈)）。排查时按编号 grep 日志即可。
+> 用户侧收到一句带错误编号的提示（见 [§十五](#十六错误处理与用户反馈)）。排查时按编号 grep 日志即可。
 
 ### 4.4 子命令（Subcommands）
 
@@ -882,8 +895,8 @@ async def check_vip(user_id, group_id, is_group):
 
 ### 7.4.1 用户级权限覆盖（`/userperm`）
 
-超管可在私聊用 `/userperm` 改「某个人算几级」（全局或仅某个群），改动写进
-`config.json` 的 `user_permissions`：
+超管可在私聊用 `/userperm`（**命令组**，动作是子命令）改「某个人算几级」
+（全局或仅某个群），改动写进 `config.json` 的 `user_permissions`：
 
 ```
 /userperm set 987654 admin              全局 admin
@@ -906,7 +919,9 @@ self.perm.user_level_source(uid, group_id=123, is_group=True)   # 来源诊断
 
 ### 7.5 运行时权限覆盖（`/perm` + `command_permissions`）
 
-超级用户可在**私聊**用 `/perm` 改写任意已注册命令（含子命令）的**生效权限**，改动写进
+`/perm` 是**命令组**（`list` / `get` / `set` / `reset` 是子命令，各有独立帮助；
+裸调 `/perm` 显示命令组帮助页）。超级用户可在**私聊**用 `/perm set` 改写任意已注册
+命令（含子命令）的**生效权限**，改动写进
 `config.json` 的 `command_permissions`，重启与插件热重载后仍生效：
 
 ```

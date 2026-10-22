@@ -155,7 +155,7 @@ async def test_command(tmp: Path):
     tmp.mkdir(parents=True, exist_ok=True)
     cfg, perm, cmds = make_cmds(tmp)
 
-    text = await ask(cmds, "/userperm")
+    text = await ask(cmds, "/userperm list")
     check("空表提示", "没有用户级覆盖" in text, text[:120])
 
     text = await ask(cmds, f"/userperm set {ALICE} admin")

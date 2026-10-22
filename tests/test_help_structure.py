@@ -10,7 +10,7 @@
 剥走，`CommandHandler.execute()` 又把它塞回 `args`，而 `_cmd_help` 只读 `args[0]`，
 于是 `/help demo alpha` **静默退化成 `/help demo`**（点号写法却正常）。用户以为查了
 子命令，看到的却是父命令的清单，而且没有任何报错。这里把三种入口的输出一起钉住，
-包括「第二段不是子命令时回落到父命令」（`/help perm set` 这类取值写法不能被判成未知命令）。
+包括「第二段不是子命令时回落到父命令」（用 `demo` 的取值写法验证；系统命令组如 `/help perm set` 现在有真正的子命令）。
 
 跑法：
     cd /ncqqpy && ./venv-arm/bin/python -B tests/test_help_structure.py

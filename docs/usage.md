@@ -1020,8 +1020,11 @@ if packet and not packet.illegal:
 作用域、归属标签与目标命令完全一致，插件卸载时也一起回收。仅私聊 + 仅超级用户
 可用（与 `/perm`、`/userperm` 同档）。
 
+> 从 1.x 起这些系统命令都是**真正的命令组**：裸调（如 `/alias`）显示的是命令组
+> 帮助页（列出可用子命令与各自权限），列表动作请显式写 `list`。
+
 ```
-/alias                          列出全部别名
+/alias list                     列出全部别名
 /alias list demo                看某条命令的别名
 /alias add d demo               给 /demo 加别名 /d（之后 /d 与 /demo 等价）
 /alias del d                    删除别名
@@ -1114,10 +1117,15 @@ async def cmd_vip(packet):
 
 ### 7.5 用命令改权限（`/perm`）
 
-超级用户私聊里可以直接改某条命令（或子命令）的权限，不用改代码、不用重启：
+超级用户私聊里可以直接改某条命令（或子命令）的权限，不用改代码、不用重启。
+每个动作是独立子命令（`/help perm set` 看用法），配置里也可以单独覆盖某个子命令：
+
+> `/perm`、`/userperm`、`/alias`、`/stop`、`/pause` 都是**命令组**：
+> 子命令各有独立帮助（`/help perm set`）、独立权限声明，裸调父命令只会显示
+> 命令组帮助页。
 
 ```
-/perm                          列出全部覆盖
+/perm list                     列出全部覆盖
 /perm get buptnews.get         查看某条命令的权限
 /perm set buptnews.get admin   把「查通知详情」改成需群管理员
 /perm set ping public          放开为所有人可用
@@ -1149,7 +1157,7 @@ async def cmd_vip(packet):
 仅私聊 + 仅超级用户可用（与 `/perm` 同档）。
 
 ```
-/userperm                             列出全部用户级覆盖
+/userperm list                        列出全部用户级覆盖
 /userperm list 123456                 只看某个群的覆盖
 /userperm get 987654                  查看某人当前生效的级别与来源
 /userperm set 987654 admin            设为**全局** admin（所有场景）

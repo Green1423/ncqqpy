@@ -58,6 +58,10 @@ def register_demo(cmds: CommandManager) -> None:
     async def _demo(packet):
         return "demo-ok"
 
+    @cmds.register("other", permission="", scope="all", description="另一条命令")
+    async def _other(packet):
+        return "other-ok"
+
     @cmds.register("grp.sub", permission="", scope="all", description="子命令")
     async def _sub(packet):
         return "sub-ok"
@@ -130,10 +134,12 @@ async def test_delete_set_move():
     check("清空成功", "已清空" in text, text[:160])
     check("清空后别名全失效", await ask(cmds, "/d2") == "_not_found")
 
-    await ask(cmds, "/alias add old alias")     # alias 命令本身
+    await ask(cmds, "/alias add old other")
+    check("move 前别名指向 other", await ask(cmds, "/old") == "other-ok")
     text = await ask(cmds, "/alias move old demo")
     check("move 改指向成功", "改指向" in text, text[:160])
     check("别名现在执行新目标", await ask(cmds, "/old") == "demo-ok")
+    await ask(cmds, "/alias move old other")
     text = await ask(cmds, "/alias move old ping")
     check("move 可以再改到另一条命令", await ask(cmds, "/old") == "pong!", text[:160])
     text = await ask(cmds, "/alias move nope demo")

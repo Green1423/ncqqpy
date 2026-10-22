@@ -123,7 +123,7 @@ async def main() -> int:
           isinstance(res, tuple) and res[0] == "_not_found", repr(res))
     _, txt = await dispatch("/plain", "group", GROUP_ADMIN, GROUP)
     check("未覆盖：群管理员可执行", txt == "plain-ok", txt)
-    _, txt = await dispatch("/perm")
+    _, txt = await dispatch("/perm list")
     check("/perm 无覆盖时的提示", "当前没有权限覆盖" in txt, txt[:80])
 
     print("\n[2] set：覆盖立刻改变拦截口径并落盘")
