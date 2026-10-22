@@ -3201,6 +3201,43 @@ async def test_afterclass(tmp: Path):
           "未开启" in plugin._afterclass_status_line(),
           plugin._afterclass_status_line())
 
+    # (f3) 免打扰时段：**连访问都不做**（不只是不推送）
+    class _CountingDekt(_FakeDekt):
+        calls = 0
+
+        async def me(self):
+            type(self).calls += 1
+            return {"user": {}, "digest": "D"}
+
+    plugin.config.set("afterclass", {"enabled": True, "quiet_hours": {
+        "start": "23:00", "end": "07:00"}})
+    counted = _CountingDekt([])
+    plugin._act_bindings = [make_binding("group", 111, counted)]
+    _CountingDekt.calls = 0
+    plugin._store.meta_set("acts_next_at", 0)          # 早就该刷了
+    plugin._in_quiet_hours = lambda now=None: True
+    await plugin._sync_once(reason="定时")
+    check("★ 免打扰时段不访问第二课堂（0 次请求）",
+          _CountingDekt.calls == 0, str(_CountingDekt.calls))
+    check("★ 免打扰时不推进下次刷新（醒来立刻补拉）",
+          plugin._store.meta_get("acts_next_at") == 0,
+          str(plugin._store.meta_get("acts_next_at")))
+    check("状态行标出「免打扰中·不访问」",
+          "免打扰中" in plugin._afterclass_status_line(),
+          plugin._afterclass_status_line())
+
+    _CountingDekt.calls = 0
+    await plugin._sync_once(reason="手动", force_acts=True)
+    check("★ 夜里手动同步也不访问（严格不打扰）",
+          _CountingDekt.calls == 0, str(_CountingDekt.calls))
+
+    plugin._in_quiet_hours = lambda now=None: False
+    _CountingDekt.calls = 0
+    await plugin._sync_once(reason="定时")
+    check("★ 过了免打扰立刻补拉", _CountingDekt.calls > 0, str(_CountingDekt.calls))
+    check("补拉后排好下次刷新",
+          float(plugin._store.meta_get("acts_next_at") or 0) > _time.time(), "")
+
     # (f) list 的 scope：默认只有置顶+通知，--scope 才出活动
     plugin.config.set("afterclass", {"enabled": True})
     plugin._act_bindings = [
