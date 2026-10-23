@@ -128,6 +128,7 @@ class Field:
 
 
 class AutoField(Field):
+    """自增主键字段（`INTEGER PRIMARY KEY AUTOINCREMENT`）。"""
     sql_type = "INTEGER"
 
     def __init__(self, **kwargs: Any) -> None:
@@ -136,6 +137,7 @@ class AutoField(Field):
 
 
 class IntegerField(Field):
+    """整数字段。"""
     sql_type = "INTEGER"
 
     def to_db(self, value: Any) -> Any:
@@ -151,6 +153,7 @@ class IntegerField(Field):
 
 
 class FloatField(Field):
+    """浮点字段。"""
     sql_type = "REAL"
 
     def to_db(self, value: Any) -> Any:
@@ -166,6 +169,7 @@ class FloatField(Field):
 
 
 class BooleanField(Field):
+    """布尔字段（落库为 0/1）。"""
     sql_type = "INTEGER"
 
     def to_db(self, value: Any) -> Any:
@@ -194,6 +198,7 @@ class CharField(Field):
 
 
 class TextField(CharField):
+    """长文本字段（无长度上限）。"""
     def __init__(self, **kwargs: Any) -> None:
         kwargs.pop("max_length", None)
         super().__init__(max_length=None, **kwargs)
@@ -350,6 +355,14 @@ class Database:
     # ---- 底层执行 ----
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
+        """执行写语句。
+
+        Args:
+            sql: SQL 文本（`?` 占位）。
+            params: 占位参数。
+
+        Returns:
+            `sqlite3.Cursor`；`lastrowid` / `rowcount` 可继续使用。"""
         try:
             return self.conn.execute(sql, tuple(params))
         except sqlite3.IntegrityError as e:
@@ -366,12 +379,29 @@ class Database:
             raise StoreError(f"{e}（SQL: {sql[:120]}）") from e
 
     def query(self, sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:
+        """执行查询并返回全部行。
+
+        Args:
+            sql: SQL 文本（`?` 占位）。
+            params: 占位参数。
+
+        Returns:
+            `list[sqlite3.Row]`（可按列名访问）。"""
         return list(self.execute(sql, params).fetchall())
 
     def query_one(self, sql: str, params: Iterable[Any] = ()) -> Optional[sqlite3.Row]:
         return self.execute(sql, params).fetchone()
 
     def scalar(self, sql: str, params: Iterable[Any] = (), default: Any = None) -> Any:
+        """查询单个标量值。
+
+        Args:
+            sql: SQL 文本。
+            params: 占位参数。
+            default: 无结果时的返回值。
+
+        Returns:
+            第一行第一列；无结果返回 `default`。"""
         row = self.query_one(sql, params)
         return default if row is None else row[0]
 
@@ -501,6 +531,13 @@ class QuerySet:
         return self._clone(using=db)
 
     def filter(self, **kwargs: Any) -> "QuerySet":
+        """按等值条件筛选（链式，不修改当前对象）。
+
+        Args:
+            **kwargs: 字段名=值；未提供的字段不参与过滤。
+
+        Returns:
+            新的 `QuerySet`。"""
         return self._clone(filters=self._filters + tuple(kwargs.items()))
 
     def exclude(self, **kwargs: Any) -> "QuerySet":
@@ -681,6 +718,17 @@ class QuerySet:
         return list(self.iterator())
 
     def get(self, **kwargs: Any) -> Any:
+        """取唯一一条记录。
+
+        Args:
+            **kwargs: 过滤条件。
+
+        Returns:
+            模型实例。
+
+        Raises:
+            DoesNotExist: 没有匹配记录。
+            MultipleObjectsReturned: 多于一条。"""
         if kwargs:
             qs = self.filter(**kwargs)
         else:
@@ -735,6 +783,13 @@ class QuerySet:
         return int(cur.rowcount or 0)
 
     def create(self, **kwargs: Any) -> Any:
+        """创建并保存一条记录。
+
+        Args:
+            **kwargs: 字段初值。
+
+        Returns:
+            已保存的模型实例（含自增主键）。"""
         return self.model(**kwargs).save(using=self._using)
 
     def get_or_create(self, defaults: Optional[dict] = None, **kwargs: Any):
@@ -856,6 +911,7 @@ class Manager:
 # ==================== 模型 ====================
 
 class ModelMeta(type):
+    """模型元类：收集字段、注入默认表名与管理器。"""
     def __new__(mcls, name: str, bases: tuple, ns: dict):
         cls = super().__new__(mcls, name, bases, ns)
         if name == "Model" and not any(hasattr(b, "_is_model") for b in bases):
@@ -944,6 +1000,10 @@ class Model(metaclass=ModelMeta):
                 and self.pk == other.pk)
 
     def save(self, *, using: Optional[Database] = None) -> "Model":
+        """保存当前实例（无主键 INSERT，否则 UPDATE）。
+
+        Args:
+            using: 指定数据库；默认用模型绑定 / 插件数据库。"""
         db = using or self._default_db
         if db is None:
             raise StoreError(f"{type(self).__name__} 没有绑定数据库：先 bind(db)")
@@ -1002,6 +1062,10 @@ class Model(metaclass=ModelMeta):
         return columns, values
 
     def delete(self, *, using: Optional[Database] = None) -> int:
+        """删除当前实例。
+
+        Args:
+            using: 指定数据库；默认用模型绑定 / 插件数据库。"""
         db = using or self._default_db
         if db is None:
             raise StoreError(f"{type(self).__name__} 没有绑定数据库：先 bind(db)")

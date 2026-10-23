@@ -59,7 +59,15 @@ class EventBus:
 
     def on(self, event_type: Type[T], hid: str = None,
            description: str = "") -> Callable[[HandlerT], HandlerT]:
-        """装饰器：注册事件处理器。hid 为空则用函数名。"""
+        """注册事件处理器。
+
+        Args:
+            event_type: 事件类（`MessageEvent` / `GroupBanEvent` …）。
+            hid: 处理器 ID，用于 `/stop event` 与 `/pause event`。
+            description: 说明（`/events` 列表展示）。
+
+        Returns:
+            装饰器；被装饰函数接收该事件实例。"""
         def decorator(func: HandlerT) -> HandlerT:
             _hid = hid or func.__name__
             meta = HandlerMeta(id=_hid, func=func, event_type=event_type,
@@ -246,6 +254,15 @@ class TimerManager:
         return func
 
     def every(self, seconds: float, name: str = None, description: str = "") -> Callable:
+        """注册固定间隔的定时任务。
+
+        Args:
+            seconds: 间隔秒数（必须大于 0）。
+            name: 任务名，默认取函数名。
+            description: 说明（`/timers` 列表展示）。
+
+        Returns:
+            装饰器；被装饰函数不接收参数。"""
         def decorator(func):
             task_name = name or func.__name__
             interval = float(seconds)

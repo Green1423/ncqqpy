@@ -382,6 +382,7 @@ class ApiClient:
 
 
 class ApiError(Exception):
+    """OneBot API 调用失败（服务端返回错误或连接不可用）。"""
     def __init__(self, retcode: int, message: str):
         self.retcode = retcode
         self.message = message

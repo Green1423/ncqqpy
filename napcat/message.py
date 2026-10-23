@@ -9,6 +9,7 @@ from enum import Enum
 
 
 class MusicPlatform(str, Enum):
+    """音乐分享平台（QQ / 网易云 / 酷狗 / 酷我）。"""
     QQ = "qq"
     NETEASE = "163"
     KUGOU = "kugou"
@@ -18,6 +19,7 @@ class MusicPlatform(str, Enum):
 
 
 class PokeType(str, Enum):
+    """戳一戳类型（根据上下文推断的交互类型）。"""
     POKE = "1"
     SHOW_LOVE = "2"
     LIKE = "3"
@@ -27,16 +29,19 @@ class PokeType(str, Enum):
 
 
 class DiceResult(int, Enum):
+    """骰子结果段。"""
     ONE = 1; TWO = 2; THREE = 3; FOUR = 4; FIVE = 5; SIX = 6
 
 
 class RPSResult(str, Enum):
+    """猜拳结果段。"""
     ROCK = "石头"
     SCISSORS = "剪刀"
     PAPER = "布"
 
 
 class ContactType(str, Enum):
+    """推荐联系人类型（QQ / 群）。"""
     QQ = "qq"
     GROUP = "group"
 

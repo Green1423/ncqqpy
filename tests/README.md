@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py test_unicode_names.py test_bool_short_flags.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py test_unicode_names.py test_bool_short_flags.py test_docs.py test_docstrings.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -26,6 +26,8 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_command_alias.py` | 命令别名（增删改查 / 持久化 / 热重载重放 / 生命周期清理） |
 | `test_unicode_names.py` | 命令名/别名支持非 ASCII（中文、连字符、注册期校验、落盘） |
 | `test_bool_short_flags.py` | 布尔参数简写（-y / 显式 short / 歧义 / 帮助展示） |
+| `test_docs.py` | 文档链接/锚点/索引可达/篇幅 |
+| `test_docstrings.py` | docstring 规范（摘要 / 段落 / 核心 API Args） |
 
 ## 依赖插件的用例会自动跳过
 

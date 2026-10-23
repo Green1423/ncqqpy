@@ -142,11 +142,25 @@ class ConfigManager:
     # ---- CRUD ----
 
     def get(self, key: str, default: Any = None) -> Any:
+        """读取配置项（点号路径）。
+
+        Args:
+            key: 如 `plugins.ai_chat.model`。
+            default: 路径不存在时的返回值。
+
+        Returns:
+            配置值；不存在返回 `default`。"""
         with self._lock:
             parent, last = self._resolve(key)
             return parent.get(last, default) if isinstance(parent, dict) else default
 
     def set(self, key: str, value: Any, save: bool = True):
+        """写入配置项（点号路径，自动建父节点）。
+
+        Args:
+            key: 点号路径。
+            value: 任意可 JSON 序列化的值。
+            save: 是否立即落盘（默认 `True`）。"""
         with self._lock:
             parent, last = self._resolve(key, create_parents=True)
             parent[last] = value

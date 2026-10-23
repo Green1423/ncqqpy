@@ -14,6 +14,7 @@ ASSIGNABLE_USER_LEVELS = ("owner", "admin", "member", "everyone")
 
 
 class DefaultPermission(str, Enum):
+    """内置权限节点枚举（按等级排序）。"""
     SUPERUSER = "superuser"
     OWNER = "owner"
     ADMIN = "admin"
@@ -258,14 +259,16 @@ class PermissionManager:
     async def check(self, user_id: int, permission: str,
                     group_id: Optional[int] = None,
                     is_group: bool = False) -> bool:
-        """检查用户权限。
+        """判断用户是否满足权限节点。
 
         Args:
-            user_id: 用户 QQ 号
-            permission: 权限节点名
-            group_id: 群号（群聊时传入）
-            is_group: 是否为群聊上下文。私聊时 owner/admin 等群角色不适用。
-        """
+            user_id: 用户 QQ。
+            permission: 权限节点（superuser/owner/admin/member/everyone 或自定义节点）。
+            group_id: 群号；私聊传 `None`。
+            is_group: 是否群聊上下文（决定是否查群角色与群内用户覆盖）。
+
+        Returns:
+            是否放行；超级用户恒为 `True`，`everyone` / 空节点恒为 `True`。"""
         # 1. 超级用户无条件通过
         if user_id in self._superusers:
             return True
@@ -319,7 +322,16 @@ class PermissionManager:
     async def check_role(self, user_id: int, role: str,
                          group_id: Optional[int] = None,
                          is_group: bool = False) -> bool:
-        """检查用户是否至少拥有指定角色等级"""
+        """按角色等级判断（含用户级覆盖与群角色默认）。
+
+        Args:
+            user_id: 用户 QQ。
+            role: 目标角色（owner/admin/member/everyone）。
+            group_id: 群号；私聊传 `None`。
+            is_group: 是否群聊上下文。
+
+        Returns:
+            用户等级 ≥ `role` 等级时为 `True`。"""
         if user_id in self._superusers:
             return True
         required = self.ROLE_HIERARCHY.get(role, 0)

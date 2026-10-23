@@ -46,7 +46,7 @@ cp config.example.json config.json     # 填 ws_url / token / superusers
 git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ```
 
-写自己的插件见 [`docs/plugin-dev.md`](docs/plugin-dev.md)：生命周期、命令/Schema、
+写自己的插件见 [`docs/plugin-dev/`](docs/plugin-dev/README.md)：生命周期、命令/Schema、
 事件、权限、错误类型（`PluginTimeoutError` 等）、配置模板契约、热重载语义。
 全部文档的入口是 [`docs/README.md`](docs/README.md)。
 
@@ -82,6 +82,8 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ./venv/bin/python -B tests/test_command_alias.py  # 命令别名（/alias）
 ./venv/bin/python -B tests/test_unicode_names.py  # 命令名/别名支持非 ASCII
 ./venv/bin/python -B tests/test_bool_short_flags.py  # 布尔参数简写（-y）
+./venv/bin/python -B tests/test_docs.py             # 文档链接/索引
+./venv/bin/python -B tests/test_docstrings.py       # docstring 规范
 ```
 
 其余套件（命令解析、帮助结构、权限覆盖）见 [`tests/README.md`](tests/README.md)。
@@ -107,6 +109,8 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_command_alias.py` | 覆盖 |
 | `tests/test_unicode_names.py` | 覆盖 |
 | `tests/test_bool_short_flags.py` | 覆盖 |
+| `tests/test_docs.py` | 覆盖 |
+| `tests/test_docstrings.py` | 覆盖 |
 
 ## 目录
 
@@ -115,8 +119,8 @@ napcat/            框架包（客户端、事件、命令、插件、权限、�
 plugins/plugin_manager/  自带插件：基于 GitHub 的插件装卸（仅私聊 · 仅超管）
 tools/publish_plugins_repo.py  生成/发布插件列表仓库（Green1423/ncqqpy-plugins）
 docs/README.md     文档索引（全部文档的入口，按阅读顺序排列）
-docs/usage.md      使用文档（配置、消息、事件、API、命令、插件运维）
-docs/plugin-dev.md 插件开发文档（含错误类型与配置模板契约）
+docs/guide/        使用文档（配置、消息、事件、API、命令、权限…）
+docs/plugin-dev/   插件开发（含错误类型与配置模板契约）
 tests/             框架回归套件
 config.example.json 脱敏配置示例（真实 config.json 不要提交）
 ```

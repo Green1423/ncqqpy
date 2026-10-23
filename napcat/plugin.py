@@ -404,7 +404,16 @@ class PluginBase(ABC):
 
     def on_message(self, group_id: int = None, private: bool = False,
                    hid: str = None, description: str = ""):
-        """快捷注册消息事件处理器"""
+        """注册消息事件处理器。
+
+        Args:
+            group_id: 只处理该群的消息；`None` 表示所有群。
+            private: `True` 时只处理私聊消息。
+            hid: 处理器 ID（用于 `/stop event`、`/pause event`）。
+            description: 处理器说明（`/events` 列表展示）。
+
+        Returns:
+            装饰器；被装饰函数接收 `MessageEvent`。"""
         def decorator(func):
             async def wrapper(event: MessageEvent):
                 if not isinstance(event, MessageEvent):
@@ -433,7 +442,14 @@ class PluginBase(ABC):
         return decorator
 
     def register_command(self, name: str, **kwargs):
-        """注册命令（自动打上本插件的归属标签，回收/定位都靠它）。"""
+        """注册命令（`CommandManager.register` 的插件便捷入口）。
+
+        Args:
+            name: 命令名，子命令写 `父.子`。
+            **kwargs: 透传给 `CommandManager.register`（schema / permission / scope …）。
+
+        Returns:
+            装饰器；被装饰函数的参数按名注入（`packet`、Schema 字段、`event`）。"""
         kwargs.setdefault("plugin", self.name)
         return self.cmds.register(name, **kwargs)
 
@@ -560,7 +576,16 @@ class PluginBase(ABC):
         self._handlers.clear()
 
     def schedule(self, seconds: float, name: str = None):
-        """注册周期定时任务（名字记在实例上，卸载时框架负责回收）。"""
+        """注册固定间隔的定时任务。
+
+        间隔从**本轮执行结束**开始计时；执行超过间隔会跳过错过的轮次，不会堆积。
+
+        Args:
+            seconds: 间隔秒数，必须大于 0。
+            name: 任务名（默认取函数名）；同名任务覆盖旧任务。
+
+        Returns:
+            装饰器；被装饰函数不接收参数。"""
         def decorator(func):
             task_name = name or func.__name__
             self._timers.append(task_name)
@@ -595,14 +620,17 @@ class PluginBase(ABC):
         return self._plugin_dir
 
     def database(self, name: str = "", *, path=None, ensure=()):
-        """打开（并缓存）本插件的 sqlite 库，返回 `napcat.store.Database`。
+        """打开（或复用）本插件的 sqlite 数据库。
 
-        默认路径 `<插件目录>/data/<插件名>.db`；`ensure=[模型, ...]` 会顺手
-        建表/补列并把模型绑定到该库（之后 `模型.objects` 直接可用）。
-        `name` 用来区分同一个插件里的多个库（`data/<name>.db`）。
+        数据库文件默认在插件目录下，随插件卸载自动关闭。
 
-        卸载/热重载时框架会调用 `_close_databases()`，不需要插件自己关。
-        """
+        Args:
+            name: 逻辑名；同名复用同一个 `Database`。
+            path: 显式文件路径（默认 `<plugin_dir>/data/<name>.db`）。
+            ensure: 首次打开时要建表的模型类。
+
+        Returns:
+            线程本地的 `Database` 实例。"""
         from .store import Database, StoreError
         key = name or "__default__"
         cached = self._databases.get(key)

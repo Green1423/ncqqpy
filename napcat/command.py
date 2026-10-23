@@ -330,7 +330,17 @@ class CommandSchema(metaclass=CommandSchemaMeta):
         return mapping, ambiguous
 
     def validate(self, args: list[str], kwargs: dict[str, str]) -> "ValidatedParams":
-        """验证 args/kwargs 对 Schema 的匹配，返回 ValidatedParams"""
+        """按字段定义校验位置参数与键值参数。
+
+        Args:
+            args: 位置参数（已剥离命令名与子命令）。
+            kwargs: `--键=值` 解析出的键值参数（也接受布尔简写 `-y`）。
+
+        Returns:
+            校验并转换后的参数容器（可按属性或下标访问）。
+
+        Raises:
+            SchemaError: 任一字段校验失败；`str(exc)` 是可直接展示的中文原因。"""
         fields = self.get_fields()
         errors: dict[str, list[str]] = {}
         cleaned: dict[str, Any] = {}
@@ -479,9 +489,25 @@ class CommandPacket:
     illegal_kind: str = ""
 
     def arg(self, index: int, default: str = "") -> str:
+        """取第 `index` 个位置参数。
+
+        Args:
+            index: 从 0 开始的位置下标。
+            default: 越界时返回的默认值。
+
+        Returns:
+            参数文本；越界返回 `default`。"""
         return self.args[index] if index < len(self.args) else default
 
     def opt(self, key: str, default: str = "") -> str:
+        """取 `--键=值` 形式的可选参数。
+
+        Args:
+            key: 键名（不含 `--`）。
+            default: 未提供时返回的默认值。
+
+        Returns:
+            参数值；未提供返回 `default`。"""
         return self.kwargs.get(key, default)
 
     def __getitem__(self, index: int) -> str:
@@ -1190,7 +1216,7 @@ class CommandManager:
     # command_permissions。**重放点只有命令登记处（_install_handler / register）**——
     # 启动时的内置/插件命令、以及插件热重载后重新注册的 handler 都走它，
     # 所以 /reload 不会让覆盖悄悄回退。设计见
-    # docs/plans/2026-09-30-command-permission-override.md §1。
+    # docs/archive/plans/2026-09-30-command-permission-override.md §1。
 
     def _load_perm_overrides(self) -> None:
         """从配置读覆盖表；非字符串值只警告不采纳（手改配置的容错）。"""
@@ -1639,11 +1665,15 @@ class CommandManager:
         return out
 
     def find_command(self, target: str) -> Optional[tuple[str, "CommandHandler"]]:
-        """按名字解析命令 → (规范名, handler)；支持顶层名/别名与 `父.子`。
+        """按名字解析命令。
 
-        规范名是覆盖表的键：别名解析到同一个 handler，但只存规范名一份 ——
-        否则同一条命令会有两条覆盖，谁生效取决于注册顺序。
-        """
+        支持顶层命令名、别名、命令组别名与 `父.子`（含子命令别名）。
+
+        Args:
+            target: 命令名或 `父.子`；允许带前缀 `/`。
+
+        Returns:
+            `(规范名, handler)`；解析不到返回 `None`。规范名是 `/perm` 覆盖表的键。"""
         target = (target or "").strip()
         if not target:
             return None
@@ -2456,6 +2486,21 @@ class CommandManager:
                  subcommands: dict = None, aliases: list[str] = None,
                  description: str = "", usage: str = "", permission: str = None,
                  scope: str = None, plugin: str = "") -> Callable:
+        """注册一条命令（用作装饰器）。
+
+        Args:
+            name: 命令名；子命令写 `父.子`，中文名与别名都按名字规则校验。
+            schema: 参数 Schema；不给则命令函数只接收 `packet`。
+            subcommands: 直接挂一组子命令（通常写 `父.子` 更清晰）。
+            aliases: 注册期别名列表（可被 `command_aliases` 配置接管）。
+            description: 一句话介绍，出现在 `/help` 列表与详情页。
+            usage: 用法行；有 Schema 时由 Schema 生成，不要手写。
+            permission: 所需权限节点；空串表示公开。
+            scope: `private` / `group` / `all`。
+            plugin: 归属插件名（卸载 / 热重载时按它回收）。
+
+        Returns:
+            装饰器：把被装饰的异步函数注册为命令处理函数。"""
         if name.count(".") > 1:
             # 子命令只支持一级（`父.子`）。旧实现 `parts[0], parts[1]` 会把
             # "a.b.c" 静默截断成 "a.b"：注册"成功"但名字不是你要的，按名解析的
@@ -2635,6 +2680,14 @@ class CommandManager:
         return text
 
     async def handle(self, event: "MessageEvent") -> Optional[Any]:
+        """解析并执行一条消息里的命令。
+
+        Args:
+            event: 消息事件；`event.plain_text` 是原始文本。
+
+        Returns:
+            命令回复（`str` / `MessageChain` / 分段 `list`），或 `None` 表示不回复；
+            `("_not_found", 命令名)` 表示调用方应按「未知命令」处理。"""
         from .models import MessageEvent
         packet = self.parser.parse(event.plain_text)
         if packet is None:

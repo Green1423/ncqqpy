@@ -101,7 +101,7 @@ def _permission_hint(stderr: str, stdout: str, argv: list) -> str:
         f"跑 ncqqpy 的账号（{_current_user()}）默认无权操作 root 的 systemd 服务，"
         f"需要 root 执行一次以下任一方案：\n"
         f"  A) polkit（推荐）：写入 /etc/polkit-1/rules.d/49-ncqq-watchdog.rules，"
-        f"内容见 docs/ncqq-watchdog.md\n"
+        f"内容见 docs/reference/watchdog/README.md\n"
         f"  B) sudoers：echo '{_current_user()} ALL=(root) NOPASSWD: "
         f"/usr/bin/systemctl restart {unit}' | "
         f"sudo tee /etc/sudoers.d/ncqq-watchdog，"

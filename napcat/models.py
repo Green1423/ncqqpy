@@ -14,6 +14,7 @@ import time as _time
 # ==================== 枚举类型 ====================
 
 class EventType(str, Enum):
+    """事件大类枚举（meta_event / message / notice / request）。"""
     META = "meta_event"
     REQUEST = "request"
     NOTICE = "notice"
@@ -22,29 +23,34 @@ class EventType(str, Enum):
 
 
 class MessageType(str, Enum):
+    """消息类型枚举（私聊 / 群聊）。"""
     PRIVATE = "private"
     GROUP = "group"
 
 
 class MessageSubType(str, Enum):
+    """消息子类型（好友、群临时会话、匿名等）。"""
     FRIEND = "friend"
     GROUP = "group"
     NORMAL = "normal"
 
 
 class GroupMemberRole(str, Enum):
+    """群成员角色（群主 / 管理员 / 成员）。"""
     OWNER = "owner"
     ADMIN = "admin"
     MEMBER = "member"
 
 
 class UserSex(str, Enum):
+    """用户性别。"""
     MALE = "male"
     FEMALE = "female"
     UNKNOWN = "unknown"
 
 
 class SegmentType(str, Enum):
+    """消息段类型（text / image / file …）。"""
     TEXT = "text"
     IMAGE = "image"
     MUSIC = "music"
@@ -71,6 +77,7 @@ class SegmentType(str, Enum):
 
 
 class LifeCycleSubType(str, Enum):
+    """生命周期子类型（connect / enable / disable）。"""
     ENABLE = "enable"
     DISABLE = "disable"
     CONNECT = "connect"
@@ -79,6 +86,7 @@ class LifeCycleSubType(str, Enum):
 # ==================== 发送者/用户/群信息 ====================
 
 class Sender(BaseModel):
+    """消息发送者信息（QQ、昵称、群名片、角色）。"""
     user_id: int
     nickname: str
     sex: Optional[UserSex] = None
@@ -89,6 +97,7 @@ class Sender(BaseModel):
 
 
 class User(BaseModel):
+    """用户简要信息。"""
     user_id: int
     nickname: str
     remark: Optional[str] = None
@@ -108,6 +117,7 @@ class User(BaseModel):
 
 
 class Group(BaseModel):
+    """群简要信息。"""
     group_id: int
     group_name: str
     group_remark: str = ""
@@ -117,6 +127,7 @@ class Group(BaseModel):
 
 
 class GroupMember(BaseModel):
+    """群成员详细信息。"""
     group_id: int
     user_id: int
     nickname: str
@@ -139,6 +150,7 @@ class GroupMember(BaseModel):
 
 
 class GroupFile(BaseModel):
+    """群文件。"""
     group_id: int
     file_id: str
     file_name: str
@@ -154,6 +166,7 @@ class GroupFile(BaseModel):
 
 
 class GroupFileFolder(BaseModel):
+    """群文件夹。"""
     group_id: int
     folder_id: str
     folder: str
@@ -167,11 +180,13 @@ class GroupFileFolder(BaseModel):
 # ==================== 消息段类型 ====================
 
 class MessageSegment(BaseModel):
+    """原始消息段（OneBot 数组格式的一条）。"""
     type: str
     data: dict = Field(default_factory=dict)
 
 
 class EmojiLike(BaseModel):
+    """表情表态记录。"""
     emoji_id: str
     emoji_type: str = ""
     likes_cnt: str = "0"
@@ -266,6 +281,7 @@ def parse_event(data: dict) -> NapCatEvent:
 # ==================== 具体事件类型 ====================
 
 class HeartbeatEvent(NapCatEvent):
+    """心跳事件（meta_event / heartbeat）。"""
     post_type: str = "meta_event"
     meta_event_type: str = "heartbeat"
     status: dict = Field(default_factory=lambda: {"online": True, "good": True})
@@ -273,12 +289,14 @@ class HeartbeatEvent(NapCatEvent):
 
 
 class LifeCycleEvent(NapCatEvent):
+    """生命周期事件（连接、启用、禁用）。"""
     post_type: str = "meta_event"
     meta_event_type: str = "lifecycle"
     sub_type: str = "connect"
 
 
 class MessageEvent(NapCatEvent):
+    """消息事件（私聊或群聊收到消息）。"""
     post_type: str = "message"
     message_type: str = "group"
     sub_type: Optional[str] = None
@@ -334,6 +352,7 @@ class MessageEvent(NapCatEvent):
 
 
 class GroupIncreaseEvent(NapCatEvent):
+    """群成员增加事件。"""
     post_type: str = "notice"
     notice_type: str = "group_increase"
     group_id: int = 0
@@ -343,6 +362,7 @@ class GroupIncreaseEvent(NapCatEvent):
 
 
 class GroupDecreaseEvent(NapCatEvent):
+    """群成员减少（退群/被踢）事件。"""
     post_type: str = "notice"
     notice_type: str = "group_decrease"
     group_id: int = 0
@@ -352,6 +372,7 @@ class GroupDecreaseEvent(NapCatEvent):
 
 
 class GroupBanEvent(NapCatEvent):
+    """群禁言 / 解除禁言事件。"""
     post_type: str = "notice"
     notice_type: str = "group_ban"
     group_id: int = 0
@@ -362,6 +383,7 @@ class GroupBanEvent(NapCatEvent):
 
 
 class GroupAdminEvent(NapCatEvent):
+    """群管理员设置 / 取消事件。"""
     post_type: str = "notice"
     notice_type: str = "group_admin"
     group_id: int = 0
@@ -370,6 +392,7 @@ class GroupAdminEvent(NapCatEvent):
 
 
 class GroupRecallEvent(NapCatEvent):
+    """群消息撤回事件。"""
     post_type: str = "notice"
     notice_type: str = "group_recall"
     group_id: int = 0
@@ -379,6 +402,7 @@ class GroupRecallEvent(NapCatEvent):
 
 
 class GroupUploadEvent(NapCatEvent):
+    """群文件上传事件。"""
     post_type: str = "notice"
     notice_type: str = "group_upload"
     group_id: int = 0
@@ -387,6 +411,7 @@ class GroupUploadEvent(NapCatEvent):
 
 
 class GroupCardEvent(NapCatEvent):
+    """群成员名片变更事件。"""
     post_type: str = "notice"
     notice_type: str = "group_card"
     group_id: int = 0
@@ -396,6 +421,7 @@ class GroupCardEvent(NapCatEvent):
 
 
 class GroupNameEvent(NapCatEvent):
+    """群名变更事件。"""
     post_type: str = "notice"
     notice_type: str = "notify"
     sub_type: str = "group_name"
@@ -405,6 +431,7 @@ class GroupNameEvent(NapCatEvent):
 
 
 class GroupTitleEvent(NapCatEvent):
+    """群头衔变更事件。"""
     post_type: str = "notice"
     notice_type: str = "notify"
     sub_type: str = "title"
@@ -414,6 +441,7 @@ class GroupTitleEvent(NapCatEvent):
 
 
 class PokeEvent(NapCatEvent):
+    """戳一戳事件。"""
     post_type: str = "notice"
     notice_type: str = "notify"
     sub_type: str = "poke"
@@ -425,6 +453,7 @@ class PokeEvent(NapCatEvent):
 
 
 class InputStatusEvent(NapCatEvent):
+    """输入状态（对方正在输入）事件。"""
     post_type: str = "notice"
     notice_type: str = "notify"
     sub_type: str = "input_status"
@@ -435,6 +464,7 @@ class InputStatusEvent(NapCatEvent):
 
 
 class ProfileLikeEvent(NapCatEvent):
+    """名片点赞事件。"""
     post_type: str = "notice"
     notice_type: str = "notify"
     sub_type: str = "profile_like"
@@ -444,6 +474,7 @@ class ProfileLikeEvent(NapCatEvent):
 
 
 class GroupGrayTipEvent(NapCatEvent):
+    """群灰条提示事件。"""
     post_type: str = "notice"
     notice_type: str = "notify"
     sub_type: str = "gray_tip"
@@ -456,12 +487,14 @@ class GroupGrayTipEvent(NapCatEvent):
 
 
 class FriendAddEvent(NapCatEvent):
+    """好友添加事件。"""
     post_type: str = "notice"
     notice_type: str = "friend_add"
     user_id: int = 0
 
 
 class FriendRecallEvent(NapCatEvent):
+    """好友消息撤回事件。"""
     post_type: str = "notice"
     notice_type: str = "friend_recall"
     user_id: int = 0
@@ -469,6 +502,7 @@ class FriendRecallEvent(NapCatEvent):
 
 
 class EssenceEvent(NapCatEvent):
+    """群精华消息变更事件。"""
     post_type: str = "notice"
     notice_type: str = "essence"
     group_id: int = 0
@@ -479,6 +513,7 @@ class EssenceEvent(NapCatEvent):
 
 
 class MsgEmojiLikeEvent(NapCatEvent):
+    """消息表情表态事件。"""
     post_type: str = "notice"
     notice_type: str = "group_msg_emoji_like"
     group_id: int = 0
@@ -489,6 +524,7 @@ class MsgEmojiLikeEvent(NapCatEvent):
 
 
 class BotOfflineEvent(NapCatEvent):
+    """机器人离线事件。"""
     post_type: str = "notice"
     notice_type: str = "bot_offline"
     user_id: int = 0
@@ -497,6 +533,7 @@ class BotOfflineEvent(NapCatEvent):
 
 
 class OnlineFileSendEvent(NapCatEvent):
+    """在线文件发送事件。"""
     post_type: str = "notice"
     notice_type: str = "online_file_send"
     peer_id: int = 0
@@ -504,6 +541,7 @@ class OnlineFileSendEvent(NapCatEvent):
 
 
 class OnlineFileReceiveEvent(NapCatEvent):
+    """在线文件接收事件。"""
     post_type: str = "notice"
     notice_type: str = "online_file_receive"
     peer_id: int = 0
@@ -511,6 +549,7 @@ class OnlineFileReceiveEvent(NapCatEvent):
 
 
 class FriendRequestEvent(NapCatEvent):
+    """好友请求事件。"""
     post_type: str = "request"
     request_type: str = "friend"
     user_id: int = 0
@@ -519,6 +558,7 @@ class FriendRequestEvent(NapCatEvent):
 
 
 class GroupRequestEvent(NapCatEvent):
+    """入群请求事件。"""
     post_type: str = "request"
     request_type: str = "group"
     group_id: int = 0
@@ -531,6 +571,7 @@ class GroupRequestEvent(NapCatEvent):
 # ==================== API 响应类型 ====================
 
 class ApiResponse(BaseModel):
+    """OneBot API 响应包装（status / retcode / data）。"""
     status: str
     retcode: int
     data: Any = None
@@ -544,6 +585,7 @@ class ApiResponse(BaseModel):
 
 
 class LoginInfo(BaseModel):
+    """登录账号信息。"""
     user_id: int
     nickname: str
     sex: Optional[str] = None
@@ -554,12 +596,14 @@ class LoginInfo(BaseModel):
 
 
 class StatusInfo(BaseModel):
+    """运行状态信息。"""
     online: bool
     good: bool
     stat: dict = Field(default_factory=dict)
 
 
 class VersionInfo(BaseModel):
+    """版本信息。"""
     version: str
     version_code: str
     codename: str = ""
@@ -567,12 +611,14 @@ class VersionInfo(BaseModel):
 
 
 class SendMsgResult(BaseModel):
+    """发送消息的返回结果。"""
     message_id: int
     res_id: Optional[str] = None
     forward_id: Optional[str] = None
 
 
 class FileInfo(BaseModel):
+    """文件信息（名称、大小、路径等）。"""
     file: str
     url: Optional[str] = None
     size: Optional[int] = None
