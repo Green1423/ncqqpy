@@ -117,7 +117,21 @@ async def test_lifecycle_and_validation():
     check("/help 组别名解析到命令组", "演示" in await ask(cmds, "/help g")
           or "grp" in await ask(cmds, "/help g"))
     text = await ask(cmds, "/alias add s grp.sub")
-    check("子命令仍不支持别名并说明", "子命令" in text, text[:160])
+    check("子命令可以起别名", "已给 /grp.sub" in text, text[:160])
+    check("子命令别名在组内可执行", await ask(cmds, "/grp s") == "sub-ok")
+    check("子命令别名不会变成顶层命令", await ask(cmds, "/s") == "_not_found")
+    check("子命令别名写进配置",
+          (cfg.get("command_aliases", {}) or {}).get("grp.sub") == ["s"],
+          str(cfg.get("command_aliases")))
+    check("组帮助里标注子命令别名", "别名：s" in await ask(cmds, "/help grp"))
+    check("`/help 父 子别名` 解析到子命令帮助",
+          (await ask(cmds, "/help grp s")).startswith("📖 /grp sub"),
+          (await ask(cmds, "/help grp s"))[:80])
+    text = await ask(cmds, "/alias del grp.s")
+    check("点号写法删除子命令别名", "已删除" in text, text[:120])
+    check("删除后子命令别名失效（写错子命令 → 回组帮助页）",
+          (await ask(cmds, "/grp s")).startswith("📖 /grp"),
+          (await ask(cmds, "/grp s"))[:60])
     text = await ask(cmds, "/alias add a" + "x" * 70 + " demo")
     check("别名过长被拒", "过长" in text, text[:160])
 
@@ -209,6 +223,61 @@ async def test_persistence_and_reregister():
 
 
 async def test_permissions_and_stop():
+    print("\n[3.1] 子命令别名：组内作用域 / 歧义 / 跨命名空间 / 重启恢复")
+    TMP5 = TMP / "subalias"
+    TMP5.mkdir(parents=True, exist_ok=True)
+    cfg5, _perm5, cmds5 = make(TMP5)
+    register_demo(cmds5)
+
+    @cmds5.register("grp2.sub2", permission="", scope="all", description="另一组")
+    async def _sub2(packet):
+        return "sub2-ok"
+
+    text = await ask(cmds5, "/alias add s grp.sub")
+    check("子命令别名可加", "已给 /grp.sub" in text, text[:160])
+    check("组内调用生效", await ask(cmds5, "/grp s") == "sub-ok")
+    check("顶层不新增命令", await ask(cmds5, "/s") == "_not_found")
+    text = await ask(cmds5, "/alias add other grp.sub")
+    check("组内别名可与顶层命令重名（作用域隔离）",
+          "已给" in text, text[:160])
+
+    # 同组冲突：别名撞子命令名 / 撞兄弟别名
+    text = await ask(cmds5, "/alias add sub grp.sub")
+    check("别名不能等于子命令名", "子命令名相同" in text, text[:120])
+    text = await ask(cmds5, "/alias add s grp.sub")
+    check("重复添加子命令别名被拒", "已经有别名" in text, text[:120])
+
+    # 跨组同名 → 必须用点号写法消歧
+    await ask(cmds5, "/alias add s grp2.sub2")
+    text = await ask(cmds5, "/alias del s")
+    check("跨组同名删除要求消歧",
+          "多个命令组" in text and "grp.s" in text and "grp2.s" in text, text[:200])
+    text = await ask(cmds5, "/alias del grp.s")
+    check("点号写法消歧删除", "已删除" in text, text[:120])
+    check("另一个组的同名别名仍在", await ask(cmds5, "/grp2 s") == "sub2-ok")
+
+    # set / move：跨命名空间
+    text = await ask(cmds5, "/alias set grp.sub p q")
+    check("整体替换子命令别名", "/p" in text and "/q" in text, text[:160])
+    check("新别名生效", await ask(cmds5, "/grp q") == "sub-ok")
+    text = await ask(cmds5, "/alias move grp.q other")
+    check("子命令别名可移到顶层命令", "改指向 /other" in text, text[:160])
+    check("移动后顶层可用", await ask(cmds5, "/q") == "other-ok")
+    text = await ask(cmds5, "/alias move q grp.sub")
+    check("顶层别名可移回子命令", "改指向 /grp.sub" in text, text[:160])
+    check("移回后只有组内可用",
+          await ask(cmds5, "/q") == "_not_found"
+          and await ask(cmds5, "/grp q") == "sub-ok")
+
+    # 重启恢复：新管理器 + 重新注册
+    cmds6 = CommandManager(prefixes=["/"],
+                           perm_manager=PermissionManager(superusers=[SUPER]),
+                           cfg_ref=ConfigManager(str(TMP5 / "config.json")))
+    register_demo(cmds6)
+    cmds6.register("grp2.sub2", permission="", scope="all")(lambda packet: "sub2-ok")
+    check("重启后子命令别名恢复", await ask(cmds6, "/grp q") == "sub-ok")
+    check("重启后另一组的别名恢复", await ask(cmds6, "/grp2 s") == "sub2-ok")
+
     print("\n[4] 权限边界 / /stop 清理 / 帮助展示")
     TMP4 = TMP / "perm"
     TMP4.mkdir(parents=True, exist_ok=True)
