@@ -47,7 +47,7 @@ async def cmd_ban(params, event):
 > 注册期就会校验，非法名字直接 `ValueError` —— 不会出现「注册成功但解析不到」。
 
 > **别名**：`register_command("demo", aliases=["d"])` 之后 `/d` 与 `/demo` 等价
-> （共用同一个 handler，权限/schema 不变）。运行期可用 `/alias add|del|set|move`
+> （共用同一套权限与参数定义）。运行期可用 `/alias add|del|set|move`
 > 管理（仅私聊 + 超管），落盘在 `config.json` 的 `command_aliases`；
 > 配置存在时是该命令别名的**全集**（空列表 = 清空，会压掉代码里的声明值）。
 > 别名支持**顶层命令、命令组与子命令**：顶层/组别名可继续接子命令
@@ -84,7 +84,7 @@ async def cmd_ban(params, event):
 | **可变参数**（`VariadicField` 不参与必填校验）内容不合法 | 同上，但框架不知道 | `return ("_schema_error", "原因")` |
 | 裸调命令组（`/cmd`） | 框架重定向到 `/help cmd` | 命令组本体**不要写函数体**（写了也不会运行） |
 
-`("_schema_error", 原因)` 是框架 `CommandManager.handle()` 认的哨兵：用户会看到
+参数不合法时会先回一句原因，再附上该命令的帮助页：
 「⚠️ 用法不正确：<原因>」外加**完整的帮助页**（用法行、参数表、默认值）。
 手写 `💡 用法：/x add group <群号>` 这类提示会与 Schema 漂移，且拿不到参数表 —— 不要写。
 
@@ -97,7 +97,7 @@ usage = build_usage("ban", BanSchema)   # → "ban <user_id> [duration=600] [rea
 **子命令带参数时也要声明 Schema**（框架的系统命令组就是这么做的）：各子命令单独
 `register_command("demo.sub", schema=SubSchema)`，帮助里的用法/参数表由 Schema 生成；
 参数缺失或取值非法时框架自动回 `⚠️ 用法不正确 + /help demo.sub`。不要在每个
-handler 里手写「用法：…」兜底 —— 那会和 Schema 漂移。
+命令函数里手写「用法：…」兜底 —— 那会和 Schema 漂移。
 
 ## 4.3.2 命令函数的签名（无 schema 时只有一个 `packet`）
 
@@ -156,7 +156,7 @@ async def cmd_group_kick(params, event):
 ```
 
 用法：
-```
+```text
 /group              → 重定向到 /help group（框架渲染的帮助页，不执行本体）
 /group ban 123 600  → 执行 group.ban
 /group kick 456     → 执行 group.kick（仅 owner 及以上）
@@ -174,7 +174,7 @@ async def cmd_group_kick(params, event):
 > 重定向到 `/help group`（帮助页里有本体描述 + 调用者有权使用的子命令），注册在父命令上的
 > 函数**不会运行** —— 想自定义这一页的内容，请写进父命令的 `description`，不要写函数体。
 > （`scope` 仍按父命令自己的声明生效：范围不符时连帮助页也不给。）
-> **需要权限的逻辑一律写进子命令** —— 框架在路由到子命令之前按该子命令自己的声明校验。
+> **需要权限的逻辑一律写进子命令** —— 权限按实际执行的子命令校验。
 
 `/help` 的三级入口、可见性过滤、每个页面各显示什么，见
 (../guide/06-commands.md#611-help-三级入口帮助文档的构成) 与
@@ -307,8 +307,7 @@ def _register_commands(self):
 ## 4.9 字符串参数的引号与转义
 
 `StrField` 拿到的是**分词并反转义后**的字符串，写命令时直接提示用户加引号即可：
-含空格的文本用 `"…"` 或 `'…'` 包起来；文本里有单引号就写成 `'don\'t'`（框架在单引号内
-也支持 `\'`；此外 `\n` `\t` `\\` `\"` 都会转义）。引号没配对时框架按空白宽松切分，
+含空格的文本用 `"…"` 或 `'…'` 包起来；文本里有单引号就写成 `'don\'t'`（单引号内也支持 `\'`；此外 `\n` `\t` `\\` `\"` 都会转义）。引号没配对时框架按空白宽松切分，
 不会让命令报错。
 
 ## 4.10 Schema 字段类型

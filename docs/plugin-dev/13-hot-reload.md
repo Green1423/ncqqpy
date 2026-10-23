@@ -5,7 +5,7 @@
 
 开发时保存文件即可自动生效（2 秒检测间隔）。也可手动触发：
 
-```
+```text
 /reload              # 重载全部插件（含新添加的）
 /reload welcome      # 热重载指定插件
 ```
@@ -18,7 +18,7 @@
 装进来、更新、卸载。插件列表文件放在 `Green1423/ncqqpy-plugins` 的
 `plugins.json`（"有哪些插件、从哪个仓库装、装哪条 ref"全由它决定）。
 
-```
+```text
 /plugin list                  看有哪些、装没装
 /plugin install <插件名>       安装（下载 → 校验 → 原子替换 → 热重载）
 /plugin update all            全部更新（本地没动过的文件才覆盖）

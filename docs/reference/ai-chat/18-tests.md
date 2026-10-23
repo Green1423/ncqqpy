@@ -1,7 +1,6 @@
 # 十八、测试
 
-> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 插件](README.md) · 上一章：[持久化与并发](17-persistence.md) · 下一章：[插件包内的 import 纪律](19-imports.md)
-
+> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 实现参考](README.md) · 上一章：[十七、持久化与并发](17-persistence.md) · 下一章：[十九、插件包内的 import 纪律](19-imports.md)
 
 测试与诊断脚本统一放在 `tests/` 下（仓库根只留运行入口）：
 

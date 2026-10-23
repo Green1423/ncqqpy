@@ -81,7 +81,7 @@ class MyPlugin(PluginBase):
 
         @self.on_ws_disconnected
         async def on_disconnected():
-            """曾经连上过之后断开。启动时连不上走 on_ws_connect_failed。"""
+            """连上之后又断开。启动时连不上走 on_ws_connect_failed。"""
 ```
 
 这几个回调**归插件所有**：`on_disable()` / 卸载时框架自动注销；重新启用时在

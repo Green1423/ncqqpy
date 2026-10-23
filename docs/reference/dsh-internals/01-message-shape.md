@@ -227,7 +227,7 @@ function buildInstructionText(files, maxBytes, omitted, truncated, style) {
 Rendered body (an optional budget marker line precedes the intro when files were omitted or truncated,
 `markerText`, `index.js:249-255`):
 
-```
+```text
 <system-reminder>
 <optional budget marker>
 <intro>

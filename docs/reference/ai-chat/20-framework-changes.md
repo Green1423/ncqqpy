@@ -1,7 +1,6 @@
 # 二十、为框架做的改动
 
-> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 插件](README.md) · 上一章：[插件包内的 import 纪律](19-imports.md) · 下一章：[与 DSH 的对应关系](21-dsh-mapping.md)
-
+> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 实现参考](README.md) · 上一章：[十九、插件包内的 import 纪律](19-imports.md) · 下一章：[二十一、与 DSH 的对应关系](21-dsh-mapping.md)
 
 实现过程中发现若干框架层问题，都在 `napcat/` 内修掉了（不是插件 workaround）：
 

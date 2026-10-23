@@ -48,7 +48,7 @@ class MyPlugin(PluginBase):
 | `PluginAccessError` | 无权访问 | — | 触发者 | 服务范围/白名单拒绝 |
 | `PluginRuntimeError` | 运行错误 | — | 触发者 | 插件 bug（框架兜底用，也可主动抛）|
 | `CommandExecutionError` | 命令失败 | — | 触发者 | 等价于「构造参数就是要回给用户的那句话」（历史写法，仍支持）|
-| `PluginLoadError` / `PluginLifecycleError` | 装载/生命周期失败 | — | **超管** | 框架在加载、`on_*` 钩子失败时用 |
+| `PluginLoadError` / `PluginLifecycleError` | 装载/生命周期失败 | — | **超管** | 加载或生命周期钩子失败时使用 |
 
 ## 16.3 框架怎么反馈
 
@@ -62,7 +62,7 @@ class MyPlugin(PluginBase):
 
 文案形如：
 
-```
+```text
 ⚠️ 执行 /aichat ask 时出错（E-3f21）：PluginTimeoutError: 上游 120s 没响应（可以稍后再试）
 ```
 

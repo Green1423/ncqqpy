@@ -1,13 +1,12 @@
 # 十七、持久化与并发
 
-> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 插件](README.md) · 上一章：[结束符](16-terminator.md) · 下一章：[测试](18-tests.md)
-
+> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 实现参考](README.md) · 上一章：[十二、Markdown 模式](12-markdown-internals.md) · 下一章：[十八、测试](18-tests.md)
 
 **配置在 `config.json`，状态在数据目录** —— 分开的理由：`config.json` 是人的领域
 （改一次要 review），会话状态是机器的领域（每句话都在写）。混在一起会让每句对话都
 重写一次核心配置文件。
 
-```
+```text
 plugins/ai_chat/data/
 ├── staging.json            未提交输入的暂存区（重启不丢）
 └── sessions/

@@ -14,7 +14,7 @@
 `ncqq.service` 是 root 的 systemd 服务。非 root 运行时直接
 `systemctl restart ncqq` 会失败：
 
-```
+```text
 Failed to restart ncqq.service: Access denied as the requested operation
 requires interactive authentication.
 ```
@@ -72,7 +72,7 @@ iLink 协议要求主动推送必须带 `context_token`，而这个 token **只�
 所以：**用微信给这个 bot 发一条任意消息**。看门狗后台常驻长轮询，收到后会把它落盘缓存，
 之后就能主动推送了。日志里会看到：
 
-```
+```text
 [watchdog] 收到微信消息（xxx@im.wechat），已缓存 context_token；如需收通知请在配置里把 target 设为 xxx@im.wechat
 ```
 

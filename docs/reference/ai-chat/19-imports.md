@@ -1,7 +1,6 @@
 # 十九、插件包内的 import 纪律
 
-> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 插件](README.md) · 上一章：[测试](18-tests.md) · 下一章：[为框架做的改动](20-framework-changes.md)
-
+> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 实现参考](README.md) · 上一章：[十八、测试](18-tests.md) · 下一章：[二十、为框架做的改动](20-framework-changes.md)
 
 这一节是踩坑记录，改 `plugins/ai_chat/` 之前请先读。
 
@@ -13,7 +12,7 @@
 此时如果一个函数**在调用时**才去 `from .llm import err_text`，Python 会重新解析
 父包 —— 拿到：
 
-```
+```text
 ModuleNotFoundError: No module named 'napcat_plugin_ai_chat'
 ```
 

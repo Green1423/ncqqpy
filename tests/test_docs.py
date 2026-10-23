@@ -47,7 +47,15 @@ def body(text: str) -> str:
 
 def anchors(path: Path) -> set[str]:
     out: set[str] = set()
-    for line in body(path.read_text(encoding="utf-8")).splitlines():
+    text = path.read_text(encoding="utf-8")
+    # 标题里可能有行内代码（如 `--force=true`），不能在解析锚点前剥掉内容
+    fence = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        if fence:
+            continue
         m = HEADING.match(line)
         if not m:
             continue
@@ -77,7 +85,7 @@ def iter_links(path: Path):
     text = body(path.read_text(encoding="utf-8"))
     for m in LINK.finditer(text):
         target = m.group(1).strip()
-        if target.startswith(("http://", "https://", "mailto:", "#")):
+        if target.startswith(("http://", "https://", "mailto:")):
             continue
         if target in ("url", "..."):
             continue
@@ -92,6 +100,8 @@ def check_links():
         for target in iter_links(path):
             path_part, _, anchor = target.partition("#")
             dest = path.parent / path_part if path_part else path
+            if target.startswith("#") and not path_part:
+                dest = path
             try:
                 dest = dest.resolve()
             except OSError:
@@ -135,6 +145,40 @@ def check_reachable():
           "; ".join(orphan[:8]))
 
 
+BANNED_PHRASES = ("旧实现", "此前", "曾经有过", "当时", "最初", "实现上",
+                  "源码里", "设计取舍", "历史遗留")
+FENCE_OPEN = re.compile(r"^```([^`]*)$")
+
+
+def check_style():
+    print("\n[4] 用户文档的写法（特性/用法，不写实现与历史）")
+    roots = [DOCS / "guide", DOCS / "plugin-dev", DOCS / "plugins"]
+    hits: list[str] = []
+    for root in roots:
+        for path in sorted(root.rglob("*.md")):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for word in BANNED_PHRASES:
+                    if word in line:
+                        hits.append(f"{path.relative_to(DOCS)}:{lineno}（{word}）")
+                        break
+    check("没有实现细节 / 历史口吻", not hits, "; ".join(hits[:8]))
+
+    untagged: list[str] = []
+    for path in sorted(DOCS.rglob("*.md")):
+        in_fence = False
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.lstrip().startswith("```"):
+                if in_fence:
+                    in_fence = False
+                else:
+                    info = line.lstrip()[3:].strip()
+                    if not info:
+                        untagged.append(str(path.relative_to(DOCS)))
+                    in_fence = True
+    check("代码块都带语言标记（编辑器可高亮）", not untagged,
+          "; ".join(sorted(set(untagged))[:8]))
+
+
 def check_layout():
     print("\n[3] 目录结构")
     check("docs/README.md 存在", (DOCS / "README.md").exists())
@@ -166,6 +210,7 @@ def main() -> int:
     check_links()
     check_reachable()
     check_layout()
+    check_style()
     print(f"\n{'=' * 52}\n通过 {PASSED} / 失败 {FAILED}")
     return 1 if FAILED else 0
 

@@ -70,7 +70,7 @@
 
 日志形如：
 
-```
+```text
 [watchdog] 健康检查未通过（连续 1/3）: online=False good=True
 [watchdog] 账号状态异常，按「断联」处理：online=False good=True
 ```
@@ -108,7 +108,7 @@
 二维码、掉线通知、登录成功反馈都走带重试的发送（`send_text_retry` /
 `send_image_retry`）：
 
-```
+```text
 发送失败 → 等 ilink_retry_interval（默认 5s）→ 再试 → … → 直到成功或
           ilink_retry_timeout（默认 300s）超时放弃
 ```
@@ -123,7 +123,7 @@ WebSocket 恢复意味着 `get_login_info` 成功 —— 也就是 QQ 登录态�
 登录那一刻的二维码指纹没有再变过（没有刷新出新码），就说明确实登进去了，
 发一条反馈：
 
-```
+```text
 ✅ QQ 已登录成功
 时间：2026-09-25 11:02:13
 登录二维码已失效，无需再扫码；机器人已恢复收发消息。
@@ -135,7 +135,7 @@ WebSocket 恢复意味着 `get_login_info` 成功 —— 也就是 QQ 登录态�
 
 实测日志里出现过这种形态（每 6 秒一轮，持续 30+ 轮）：
 
-```
+```text
 WebSocket 已连接 → 重连成功（第 31 次连接） → 连接已关闭: received 1005
 → 无法获取登录信息 → WebSocket 已断开 → 5.0s 后重连 → （循环）
 ```

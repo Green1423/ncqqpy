@@ -9,7 +9,7 @@
 
 ## 14.1 目录
 
-```
+```text
 plugins/demo/
 ├── __init__.py            # docstring + `from .plugin import DemoPlugin` + `PLUGIN`
 ├── plugin.py              # 只有插件类 + 生命周期 + register_module(...)

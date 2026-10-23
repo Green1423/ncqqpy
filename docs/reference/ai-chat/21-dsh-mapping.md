@@ -1,7 +1,6 @@
 # 二十一、与 DSH 的对应关系
 
-> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 插件](README.md) · 上一章：[为框架做的改动](20-framework-changes.md)
-
+> 文档索引：[docs/README.md](../../README.md) · 上级：[ai_chat 实现参考](README.md) · 上一章：[二十、为框架做的改动](20-framework-changes.md)
 
 | 本插件 | DSH |
 |--------|-----|

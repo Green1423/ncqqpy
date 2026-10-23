@@ -22,7 +22,7 @@ class HelloPlugin(PluginBase):
 
 ## 1.2 插件生命周期
 
-```
+```text
 PluginManager.load()
   └→ __init__(api, event_bus, timer, ...)   # 注入依赖
   └→ on_load()                               # 初始化、不注册事件
@@ -33,7 +33,7 @@ PluginManager.enable()
 ...运行中...                                   # 处理事件、响应命令
 
 PluginManager.disable()
-  └→ on_disable()                            # 自动取消 self._handlers
+  └→ on_disable()                            # 自动注销本次注册的处理器
 
 PluginManager.unload()
   └→ on_unload()                             # 释放资源、清理

@@ -112,7 +112,7 @@ client.plugins.stop_watch()
 
 ## 8.6 完整生命周期
 
-```
+```text
 PluginManager.load()
   └→ __init__()
   └→ on_load()
@@ -123,7 +123,7 @@ PluginManager.enable()
 ... 运行中 ...
 
 PluginManager.disable()
-  └→ on_disable()      # 自动取消注册本次启用注册的 _handlers
+  └→ on_disable()      # 自动注销本次注册的处理器
                        # （定时任务与命令仍由插件自己清理，见下）
 
 PluginManager.unload()
@@ -166,7 +166,7 @@ class WelcomePlugin(PluginBase):
     description = "入群欢迎 + 退群通知"
 
     def config_template(self) -> dict:
-        """完整默认配置：框架在加载时写进 config.json → plugins.welcome。
+        """完整默认配置：首次加载时会写入 config.json → plugins.welcome。
 
         每个插件都要实现它 —— 「首次运行即把所有配置项写进文件」是框架契约，
         运维打开 config.json 就能看到有哪些开关可改。
@@ -206,7 +206,7 @@ class WelcomePlugin(PluginBase):
 装进来、更新、卸载 —— 不用登服务器改文件。列表文件在
 `Green1423/ncqqpy-plugins` 的 `plugins.json`：
 
-```
+```text
 /plugin list                    看有哪些插件、装没装
 /plugin info ai_chat            看单个插件的来源与状态
 /plugin check                   检查全部已装插件的上游更新

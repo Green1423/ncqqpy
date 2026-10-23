@@ -5,7 +5,7 @@
 
 ## 7.1 角色层级
 
-```
+```text
 superuser(100) > owner(80) > admin(60) > member(20) > everyone(0)
 ```
 
@@ -44,7 +44,7 @@ async def check_vip(user_id, group_id, is_group):
 超管可在私聊用 `/userperm`（**命令组**，动作是子命令）改「某个人算几级」
 （全局或仅某个群），改动写进 `config.json` 的 `user_permissions`：
 
-```
+```text
 /userperm set 987654 admin              全局 admin
 /userperm set 987654 member 123456      仅群 123456 内为 member
 /userperm clear 987654 123456
@@ -70,7 +70,7 @@ self.perm.user_level_source(uid, group_id=123, is_group=True)   # 来源诊断
 命令（含子命令）的**生效权限**，改动写进
 `config.json` 的 `command_permissions`，重启与插件热重载后仍生效：
 
-```
+```text
 /perm                      列出全部权限覆盖
 /perm get <命令>           查看生效值 + 声明值
 /perm set <命令> <权限>    设置覆盖
@@ -82,7 +82,7 @@ self.perm.user_level_source(uid, group_id=123, is_group=True)   # 来源诊断
 - **覆盖值优先于 `register(permission=...)` 的声明值**。`CommandHandler.permission` 是生效值，
   新增的 `declared_permission` 是代码里的原值（`/perm reset` 恢复它；`/help <命令>` 详情在两者
   不同时标注 `（已覆盖，声明值：X）`）。
-- **重放点只有命令登记处**（`CommandManager._install_handler` / `register()`）：插件热重载后
+- **插件热重载 / 重新注册后**，别名与权限覆盖会自动重新应用：
   重新注册命令时会自动重新套用覆盖，`/reload` 不会把权限改回声明值。
 - **命令组本体不可覆盖**（本体不校验权限，权限属于各子命令）：`/perm set <父命令>` 会被拒绝
   并列出子命令，请逐条设置 `父.子`。
@@ -91,7 +91,6 @@ self.perm.user_level_source(uid, group_id=123, is_group=True)   # 来源诊断
   当场拒绝；`config.json` 里手写的未知节点只记 warning 并保留 —— 该命令对非超级用户不可用。
 - **只作用于框架的命令级权限**，不影响插件内部自做的判定（如 (../../plugins/ai_chat) 的工具级权限、
   (../../plugins/bupt_news) 的服务范围白名单）。
-- 命令名只支持两级（`父.子`）：三级名现在会显式 `ValueError`
-  （旧实现把它静默截断成两级，注册"成功"但名字不是你要的）。
+- 命令名只支持两级（`父.子`）；三级名在注册时直接报错，不会静默截断。
 
 ---

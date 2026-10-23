@@ -50,7 +50,7 @@ class MyPlugin(PluginBase):
 ### 15.3.1 首次运行即初始化全部配置项（`config_template()`）
 
 **契约**：每个插件都要实现 `config_template()`，返回自己的**完整**默认配置；
-框架在**插件构造时**（`PluginBase.__init__`，即 `on_load()` 之前）把它补进
+插件首次加载时会把缺失的配置项补进
 `config.json` 的 `plugins.<插件名>` 段。运维打开配置文件就能看到这个插件有哪些
 开关可改，而不是只能翻代码。
 

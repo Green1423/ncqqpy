@@ -3,7 +3,9 @@
 本目录是 ncqqpy 的**全部说明文档**，按职责分成六个区：用框架、写插件、内置插件手册、
 参考、归档、贡献规范。每篇文档开头都有「上级 / 上一章 / 下一章」导航。
 
-```
+> 文档中的 QQ、群号、编号、密钥均为**虚构示例**，请替换成自己的数据。
+
+```text
 docs/
 ├── README.md              # 本页：总索引与阅读路径
 ├── guide/                 # 用框架：配置 → 消息 → 事件 → API → 命令 → 权限 …
@@ -91,6 +93,7 @@ docs/
 | [sqlite ORM](reference/store.md) | `napcat.store`：模型、字段、查询、事务、迁移边界 |
 | [看门狗](reference/watchdog/README.md) | 断线自动重启 + 扫码恢复的唯一状态机、配置与排障 |
 | [DSH 内部机制](reference/dsh-internals/README.md) | DSH 的消息投影、会话日志、系统提示与上下文压缩（`ai_chat` 的语义依据） |
+| [ai_chat 实现参考](reference/ai-chat/README.md) | Markdown 渲染、持久化、测试、import 纪律、框架改动、DSH 映射 |
 
 ## 五、归档（`archive/`）
 
@@ -105,7 +108,7 @@ docs/
 
 ## 目录速览
 
-```
+```text
 ncqqpy/
 ├── main.py            # 启动入口（从 config.json 读配置）
 ├── run.sh             # 启动脚本（venv-arm + .env）
