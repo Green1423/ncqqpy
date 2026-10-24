@@ -3004,7 +3004,7 @@ async def test_afterclass(tmp: Path):
 
     # 首轮：每个绑定各自建基线，一条都不发
     check("★ 每个绑定各自建基线、一条都不发",
-          await plugin._sync_activities() == (3, 0) and api.sent == [],
+          await plugin._sync_activities() == (3, 0, True) and api.sent == [],
           f"sent={api.sent}")
     check("基线后各绑定积压都空",
           all(not b["store"].backlog() for b in plugin._act_bindings), "")
@@ -3012,7 +3012,7 @@ async def test_afterclass(tmp: Path):
     # 每绑定各来一条新的 → 各自发到**自己的**目标
     plugin._act_bindings[0]["client"].acts.append(act(10, "群1新活动"))
     plugin._act_bindings[1]["client"].acts.append(act(20, "私聊新活动"))
-    check("★ 两个绑定各推 1 条", await plugin._sync_activities() == (2, 2),
+    check("★ 两个绑定各推 1 条", await plugin._sync_activities() == (2, 2, True),
           str(len(api.sent)))
     targets = sorted((k, t) for k, t, _ in api.sent)
     check("★ 各绑定只发自己的目标", targets == [("group", "111"),
@@ -3238,6 +3238,79 @@ async def test_afterclass(tmp: Path):
     check("补拉后排好下次刷新",
           float(plugin._store.meta_get("acts_next_at") or 0) > _time.time(), "")
 
+    # (f3b) 拉取失败 → 短间隔重试（否则一次抖动白等 10–60 分钟，活动漏掉）
+    class _NetFail(_FakeDekt):
+        async def activities(self, **_kw):
+            raise RuntimeError("Cannot connect to host dekt.bupt.edu.cn")
+
+    plugin.config.set("afterclass", {"enabled": True, "interval_min": 600,
+                                     "interval_max": 3600,
+                                     "interval_retry": 300})
+    plugin._in_quiet_hours = lambda now=None: False
+    plugin._act_bindings = [make_binding("group", 111, _NetFail([]))]
+    plugin._store.meta_set("acts_next_at", 0)
+    ok = await plugin._sync_activities()
+    check("★ 网络失败时该绑定标记为失败（ok=False）",
+          ok == (0, 0, False), str(ok))
+
+    plugin._store.meta_set("acts_next_at", 0)
+    before = _time.time()
+    await plugin._sync_once(reason="定时")
+    nxt = float(plugin._store.meta_get("acts_next_at") or 0)
+    gap = nxt - before
+    check("★ 失败后按短间隔重试（≈interval_retry，而不是 10–60 分钟）",
+          0 < gap <= 310, f"{gap:.0f}s")
+
+    # 成功时仍按 10–60 分钟
+    plugin._act_bindings = [make_binding("group", 111, _FakeDekt([]))]
+    plugin._store.meta_set("acts_next_at", 0)
+    before = _time.time()
+    await plugin._sync_once(reason="定时")
+    gap = float(plugin._store.meta_get("acts_next_at") or 0) - before
+    check("成功时按 10–60 分钟排下一次", 600 <= gap <= 3610, f"{gap:.0f}s")
+
+    # (f4) 活动排序：按**活动时间**，不是按入库时间
+    order_recs = [
+        {"id": "1", "title": "三周后", "start": "2026-11-12 10:00", "ts": 1},
+        {"id": "2", "title": "明天", "start": "2026-10-24 09:00", "ts": 2},
+        {"id": "3", "title": "上周", "start": "2026-10-15 09:00", "ts": 3},
+        {"id": "4", "title": "没时间", "start": "", "ts": 4},
+        {"id": "5", "title": "今天下午", "start": "2026-10-23 15:00", "ts": 5},
+        {"id": "6", "title": "昨天", "start": "2026-10-22 09:00", "ts": 6},
+    ]
+    ordered = BuptNewsPlugin._sort_activities(order_recs, now="2026-10-23 12:00")
+    check("★ 活动按时间排：未来升序 → 已结束降序 → 无时间兜底",
+          [r["id"] for r in ordered] == ["5", "2", "1", "6", "3", "4"],
+          str([r["id"] for r in ordered]))
+    check("排序不改动入参", [r["id"] for r in order_recs] == ["1", "2", "3", "4", "5", "6"],
+          str([r["id"] for r in order_recs]))
+
+    # 列表里也按这个顺序显示（用**独立 store**；日期取极值，避免"跑测试的日子"影响结论）
+    far = [
+        {"id": "f1", "title": "远期1", "start": "2099-01-01 09:00", "ts": 1},
+        {"id": "f2", "title": "远期2", "start": "2099-02-01 09:00", "ts": 2},
+        {"id": "p1", "title": "远古1", "start": "2000-01-01 09:00", "ts": 3},
+        {"id": "p2", "title": "远古2", "start": "2000-02-01 09:00", "ts": 4},
+        {"id": "n1", "title": "没时间", "start": "", "ts": 5},
+    ]
+    order_store = ActivityStore(str(tmp / "order-only.json"))
+    order_store.upsert(far)
+    order_store.mark_pushed([r["id"] for r in far])
+    plugin._act_bindings = [make_binding("group", 111, _FakeDekt([]))]
+    plugin._act_bindings[0]["store"] = order_store
+    shown = plugin._activity_list_lines(10)
+    ids = [line.split()[0] for line in shown[1:]]
+    check("★ list 的活动区同样按活动时间排（未来升序→过去降序→无时间）",
+          ids == ["f1", "f2", "p2", "p1", "n1"], str(ids))
+
+    # 推送：单轮上限内优先推时间最靠前的
+    order_store._data["pushed"] = []
+    backlog = order_store.backlog()
+    batch = BuptNewsPlugin._sort_activities(backlog)[:3]
+    check("★ 单轮上限内优先推时间最靠前的活动",
+          [r["id"] for r in batch] == ["f1", "f2", "p2"],
+          str([r["id"] for r in batch]))
+
     # (f) list 的 scope：默认只有置顶+通知，--scope 才出活动
     plugin.config.set("afterclass", {"enabled": True})
     plugin._act_bindings = [
@@ -3278,8 +3351,9 @@ async def test_afterclass(tmp: Path):
           "🎪 第二课堂" in out and "摘要1" not in out, out[:200])
     check("多绑定时标出活动归属",
           "[group111]" in out or "[user222]" in out, out[:200])
-    check("活动按时间倒序（最新在前）",
-          out.index("901") < out.index("900"), out[:200])
+    # 口径已改为"即将开始的在前（升序）"：900 是 10-26、901 是 10-27 → 900 在前
+    check("活动按活动时间升序（最近的在前）",
+          out.index("900") < out.index("901"), out[:200])
 
     out = await say("/buptnews list --scope=all")
     check("★ --scope=all 同时有通知与活动",
