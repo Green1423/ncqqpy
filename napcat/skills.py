@@ -61,6 +61,12 @@ class SkillContext:
     is_admin: bool = False
     #: 附加信息（调用方自定义，技能不认识就忽略）
     extra: dict = field(default_factory=dict)
+    #: **怎么回消息**：`await ctx.send("文字")` 直接把结果发给用户。
+    #:
+    #: 技能是「用户说人话 → AI 转成指令 → 插件执行并自己回复」这条链，
+    #: 所以插件要么用它回话，要么走自己的命令通道；AI 不会替它转述，
+    #: 也不会收到它的输出（`SkillContext` 里没有返回值回传通道）。
+    send: Optional[Callable[[str], Any]] = None
 
     def to_dict(self) -> dict:
         return {"caller": self.caller, "user_id": self.user_id,
