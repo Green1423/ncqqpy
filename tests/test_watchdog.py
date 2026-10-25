@@ -3604,6 +3604,89 @@ async def test_targets_commands(tmp: Path):
           "_not_found" not in out and "已保存" in out, repr(out)[:60])
 
 
+async def test_skills(tmp: Path):
+    print("\n[27] ai_chat 技能：检索/最近/详情 + 权限")
+    from napcat.command import CommandManager
+    from napcat.permission import PermissionManager
+    from napcat.skills import SkillContext, call_skill
+    from plugins.bupt_news.main import BuptNewsPlugin
+    from plugins.bupt_news.skills import register as register_skills
+    from plugins.bupt_news.store import StateStore
+
+    d = tmp / "skills"
+    d.mkdir(parents=True, exist_ok=True)
+    perm = PermissionManager()
+    perm.set_superusers([1])
+    plugin = BuptNewsPlugin(api=None, event_bus=None, timer=None,
+                            cmd_manager=CommandManager(perm_manager=perm),
+                            perm_manager=perm, file_manager=None,
+                            logger=_logger(), groups=None,
+                            cfg=_FakeCfg({"plugins": {"bupt_news": {
+                                "data_dir": str(d), "enabled": False,
+                                "targets": {"users": {"100000555": {
+                                    "message": True}}}}}}))
+    await plugin.on_load()
+    plugin._store = StateStore(str(d / "state.json"), str(d / "notices.jsonl"))
+    nid = plugin._store.add_notice({
+        "newsid": "1", "treeid": "1154", "title": "关于麻腮风疫苗补种的通知",
+        "body": "请大一新生于本周五到校医院接种麻腮风疫苗。",
+        "summary": "新生疫苗补种", "summary_ai": True, "student_ai": True,
+        "for_students": True, "dept": "后勤部", "date": "2026-10-20",
+        "images": [], "tables": [],
+        "url": "http://my.bupt.edu.cn/x.jsp?wbnewsid=1"})
+
+    n = register_skills(plugin)
+    check("★ 注册了 4 个技能", n == 4, str(n))
+    skills = {s.name: s for s in plugin.skills.list()}
+    check("技能名带插件前缀（全局唯一）",
+          all(name.startswith("bupt_news.") for name in skills), str(sorted(skills)))
+    check("★ 暴露给模型的名字只含合法字符",
+          all(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", s.tool_name) for s in skills.values()),
+          str([s.tool_name for s in skills.values()]))
+
+    sup = SkillContext(caller="ai_chat", user_id=1, is_superuser=True)
+    allowed = SkillContext(caller="ai_chat", user_id=100000555)
+    outsider = SkillContext(caller="ai_chat", user_id=100000999)
+
+    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, sup)
+    check("★ search 命中并带编号/日期/摘要",
+          f"#{nid}" in out and "2026-10-20" in out and "新生疫苗补种" in out, out[:100])
+    out = await call_skill(skills["bupt_news.search"], {"query": "不存在的词"}, sup)
+    check("search 无命中给出明确说明", "没有搜到" in out, out[:60])
+    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, outsider)
+    check("★ 未授权用户调 search 被拒",
+          "没有对当前用户" in out, out[:60])
+    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, allowed)
+    check("授权用户（在 targets 里）可以搜", "#" in out, out[:60])
+
+    out = await call_skill(skills["bupt_news.recent"], {}, sup)
+    check("recent 列出通知", f"#{nid}" in out, out[:80])
+    out = await call_skill(skills["bupt_news.recent"], {"limit": 1}, sup)
+    check("recent 支持 limit", len([ln for ln in out.splitlines() if ln.startswith("#")]) == 1,
+          out[:80])
+
+    out = await call_skill(skills["bupt_news.notice"], {"id": f"#{nid}"}, sup)
+    check("★ notice 返回部门/日期/正文/原文链接",
+          "后勤部" in out and "2026-10-20" in out and "校医院" in out
+          and "wbnewsid=1" in out, out[:120])
+    out = await call_skill(skills["bupt_news.notice"], {"id": "999999"}, sup)
+    check("notice 编号不存在时说明保留范围",
+          "没有编号" in out and "500" in out, out[:80])
+    out = await call_skill(skills["bupt_news.notice"], {"id": "abc"}, sup)
+    check("notice 非数字编号给出提示", "数字" in out, out[:60])
+
+    out = await call_skill(skills["bupt_news.activities"], {}, sup)
+    check("没有活动绑定时 activities 说明原因", "绑定" in out, out[:80])
+    out = await call_skill(skills["bupt_news.activities"], {}, allowed)
+    check("★ activities 只给超管（绑定账号的个人数据）",
+          "只对超级用户开放" in out, out[:60])
+
+    # 停用/卸载时技能要被撤掉，否则模型会摸到死函数
+    plugin.skills.unregister("bupt_news.search")
+    check("技能可单独注销",
+          "bupt_news.search" not in {s.name for s in plugin.skills.list()}, "")
+
+
 async def _cleanup_artifacts():
     for stale in (ROOT / "napcat" / "data").glob("qrcode_sent_*.png"):
         try:
@@ -3646,6 +3729,7 @@ async def main():
     await test_portal_search(tmp)
     await test_afterclass(tmp)
     await test_targets_commands(tmp)
+    await test_skills(tmp)
     await _cleanup_artifacts()
     print(f"\n===== 通过 {PASSED} 项，失败 {FAILED} 项 =====")
     return 1 if FAILED else 0

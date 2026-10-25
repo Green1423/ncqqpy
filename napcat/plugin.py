@@ -13,6 +13,8 @@ import sys
 import time
 import traceback
 from abc import ABC, abstractmethod
+
+from .skills import SkillContext, SkillRegistry
 from pathlib import Path
 from typing import Optional, Type
 
@@ -201,7 +203,8 @@ class PluginBase(ABC):
     def __init__(self, api: ApiClient, event_bus: EventBus, timer: TimerManager,
                  cmd_manager: CommandManager, perm_manager: PermissionManager,
                  file_manager: FileManager, logger, groups=None, cfg=None,
-                 client=None, error_reporter=None, plugin_dir=None):
+                 client=None, error_reporter=None, plugin_dir=None,
+                 skill_registry=None):
         self.api = api
         #: 插件自己的目录（包插件是 `plugins/<名字>/`，单文件插件是 `plugins/`）。
         #: `self.database()` 默认把 sqlite 文件放在它下面的 `data/` 里。
@@ -214,6 +217,10 @@ class PluginBase(ABC):
         self.event_bus = event_bus
         self.timer = timer
         self.cmds = cmd_manager
+        #: 技能表（**别的插件**把能力交给 AI 用的通道，见 `napcat.skills`）。
+        #: 框架注入共享实例；单独 new 插件（测试/脚本）时给一个独立实例，
+        #: 语义仍然是「注册给能看见它的人」。
+        self.skills = skill_registry if skill_registry is not None else SkillRegistry()
         self.perm = perm_manager
         self.files = file_manager
         self.logger = logger
@@ -456,6 +463,28 @@ class PluginBase(ABC):
     def unregister_command(self, name: str) -> bool:
         """取消注册命令"""
         return self.cmds.unregister(name)
+
+    # ---- 技能（把能力交给 AI 用，见 napcat.skills）----
+
+    def register_skill(self, name: str, *, description: str = "",
+                       parameters: Optional[dict] = None, **kwargs):
+        """注册一个**给模型调用**的技能（与命令相对：命令给人，技能给 AI）。
+
+            @self.register_skill("search", description="搜 BYR Docs",
+                                 parameters={"type": "object",
+                                             "properties": {"query": {"type": "string"}},
+                                             "required": ["query"]})
+            async def search(args, ctx):
+                return "\n".join(...)
+
+        返回装饰器；直接传 `handler=` 也可以（`**kwargs` 透传）。
+        卸载/禁用时框架会把本插件注册的技能一起撤掉，模型不会再摸到死函数。
+        """
+        kwargs.update(description=description, parameters=parameters)
+        return self.skills.decorator(self.name, name, **kwargs)
+
+    def unregister_skill(self, name: str) -> bool:
+        return self.skills.unregister(self.skills.qualify(self.name, name))
 
     # ---- 声明式注册（注册与逻辑分离，见 napcat.registry）----
 
@@ -773,6 +802,9 @@ class PluginManager:
         self._cfg = cfg
         self._client = client          # 主客户端（注入给插件）
         self._plugins: dict[str, PluginBase] = {}
+        #: 技能表：**跨插件**共享 —— 提供方注册，调用方（ai_chat）读取。
+        #: 放这里而不是各插件自己一份：提供方不该依赖消费者。
+        self.skill_registry = SkillRegistry(logger=self.logger)
         self._watcher_task: Optional[asyncio.Task] = None
         self._file_mtimes: dict[str, float] = {}
         #: 被**显式禁用**过的插件名（运维/命令禁用）。与「还没启用」区分开：
@@ -1119,6 +1151,7 @@ class PluginManager:
                 instance = plugin_class(
                     api=self.api, event_bus=self.event_bus,
                     timer=self.timer, cmd_manager=self.cmd_manager,
+                    skill_registry=self.skill_registry,
                     perm_manager=self.perm_manager,
                     file_manager=self.file_manager, logger=self.logger,
                     groups=self._groups, cfg=self._cfg, client=self._client,
@@ -1182,6 +1215,7 @@ class PluginManager:
                     if k == mod_name or k.startswith(mod_name + ".")]:
             sys.modules.pop(key, None)
         try:
+            self.skill_registry.unregister_plugin(name)
             self.cmd_manager.unregister_plugin(name)
         except Exception:  # noqa: BLE001 - 回收失败不该掩盖加载失败的原始异常
             self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
@@ -1258,6 +1292,12 @@ class PluginManager:
             # 于是这些处理器永久泄漏：插件明明没启用，事件却照收（再启用一次还会叠加）。
             plugin._off_own_handlers()
             plugin._off_own_timers()
+            try:
+                # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
+                # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
+                self.skill_registry.unregister_plugin(name)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 self.cmd_manager.unregister_plugin(name)
             except Exception:  # noqa: BLE001 - 回收失败不掩盖启用失败的原始异常
@@ -1336,6 +1376,12 @@ class PluginManager:
             self.logger.error(f"启用插件 {name} 失败:\n{traceback.format_exc()}")
             plugin._off_own_handlers()
             plugin._off_own_timers()
+            try:
+                # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
+                # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
+                self.skill_registry.unregister_plugin(name)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 self.cmd_manager.unregister_plugin(name)
             except Exception:  # noqa: BLE001
@@ -1456,6 +1502,12 @@ class PluginManager:
             # 定时任务与命令同理：实例都要走了，它的任务不该继续跑、它的命令
             # 也不该继续能被调用（旧命令绑的是这个死实例，调用等于执行旧代码）。
             plugin._off_own_timers()
+            try:
+                # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
+                # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
+                self.skill_registry.unregister_plugin(name)
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 self.cmd_manager.unregister_plugin(name)
             except Exception:  # noqa: BLE001

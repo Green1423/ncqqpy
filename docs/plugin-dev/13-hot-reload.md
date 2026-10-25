@@ -12,6 +12,19 @@
 
 关闭自动监控：`client.plugins.stop_watch()`
 
+## 13.0 热重载**只换插件代码**，不换框架
+
+改了 `napcat/`（框架）里的任何东西 —— 新模块、`PluginBase` 的新方法、命令系统行为 ——
+都要**重启进程**（`systemctl restart ncqqpy`）才生效。热重载只是重新 import
+`plugins/<名字>/`。
+
+这不是缺点，是边界：框架代码在进程启动时就被广泛引用了（类、注册表、事件循环），
+热替换只会换出一半新一半旧的诡异状态。
+
+> 依赖新框架 API 的插件**必须**自己兜底：`hasattr(self, "register_skill")` 之类，
+> 没兜底的插件会在老进程里 `on_load` 直接失败。写插件时把「框架可能比插件旧」
+> 当成正常状态（技能、`napcat.skills` 就是这么接入的）。
+
 ## 13.1 从 GitHub 装卸插件（`plugin_manager`）
 
 框架自带 (../../plugins/plugin_manager)：在**私聊**里以超管身份把插件从 GitHub

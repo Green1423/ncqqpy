@@ -20,7 +20,8 @@
 | [定时任务](10-timers.md) | — |
 | [文件管理](11-files.md) | — |
 | [完整插件示例](12-example.md) | — |
-| [热重载](13-hot-reload.md) | 13.1 从 GitHub 装卸插件（`plugin_manager`） |
+| [热重载](13-hot-reload.md) | 13.0 热重载只换插件代码（框架改动要重启） · 13.1 从 GitHub 装卸插件（`plugin_manager`） |
 | [插件包结构：注册与逻辑分离](14-layout.md) | 14.1 目录 · 14.2 注册：`plugin.py`（没有逻辑） · 14.3 逻辑：`commands/chat.py` · 14.4 逻辑：`events/` 与 `jobs/` … |
 | [配置管理](15-config.md) | 15.1 config.json · 15.2 bind / unbind 自动持久化 · 15.3 插件配置 · 15.4 ConfigManager API |
 | [错误处理与用户反馈](16-errors.md) | 16.1 三种写法，按你掌握的信息量选 · 16.2 错误类型速查（`from napcat.errors import ...`） · 16.3 框架怎么反馈 · 16.4 配置（`config.json` 顶层） … |
+| [技能（把能力交给 AI 用）](17-skills.md) | 17.1 注册 · 17.2 三条硬约束 · 17.3 调用上下文 · 17.4 生命周期 · 17.5 消费方 · 17.6 调试 |
