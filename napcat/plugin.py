@@ -466,22 +466,25 @@ class PluginBase(ABC):
 
     # ---- 技能（把能力交给 AI 用，见 napcat.skills）----
 
-    def register_skill(self, name: str, *, description: str = "",
-                       parameters: Optional[dict] = None, **kwargs):
-        """注册一个**给模型调用**的技能（与命令相对：命令给人，技能给 AI）。
+    def register_skill(self, name: str, *, command: str = "",
+                       description: str = "") -> "Skill":
+        """把你的**一条命令**挂给 AI 使用（技能 = 命令映射，不另写 handler）。
 
-            @self.register_skill("search", description="搜 BYR Docs",
-                                 parameters={"type": "object",
-                                             "properties": {"query": {"type": "string"}},
-                                             "required": ["query"]})
-            async def search(args, ctx):
-                return "\n".join(...)
+            async def on_load(self):
+                self.register_skill("search", command="byrdocs.search")
 
-        返回装饰器；直接传 `handler=` 也可以（`**kwargs` 透传）。
-        卸载/禁用时框架会把本插件注册的技能一起撤掉，模型不会再摸到死函数。
+        参数 schema 与说明都**从命令自己取**（`CommandSchema` / `description`），
+        执行时走 `CommandManager.handle()` —— 权限、作用域、Schema 校验、
+        错误反馈与用户手敲完全同一条路径。
+
+        触发时由命令的返回值发消息，AI 不接话、也不接收输出。
+        卸载/禁用时框架会把本插件注册的技能一起撤掉。
         """
-        kwargs.update(description=description, parameters=parameters)
-        return self.skills.decorator(self.name, name, **kwargs)
+        # `cmds` 可能不存在（测试里 __new__ 出来的最小插件）——
+        # 归属校验是「能校验就更严」，不该因此让注册失败
+        return self.skills.register(
+            self.name, name, command=command, description=description,
+            cmds=getattr(self, "cmds", None))
 
     def unregister_skill(self, name: str) -> bool:
         return self.skills.unregister(self.skills.qualify(self.name, name))

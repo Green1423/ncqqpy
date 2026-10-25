@@ -1,35 +1,25 @@
-"""技能注册表 —— 让**别的插件**把自己的能力交给 AI 使用。
+"""技能注册表 —— 把插件**已有的命令**交给 AI 使用。
 
-命令是给**人**用的（`/byrdocs search …`），技能是给**模型**用的：
-一个插件注册技能，`ai_chat` 把它包成工具暴露给模型，模型在对话里调用它。
+命令是给人敲的（`/byrdocs search 线代`），技能是给模型调的：同一个命令，
+模型也能触发。所以技能**不另写 handler** —— 它只是一个「命令映射」：
 
 ```python
-# 在任意插件里（on_load / on_enable 都行）
-@self.register_skill(
-    "search",
-    description="在 BYR Docs 里搜资料，返回编号 + 标题 + 大小。",
-    parameters={
-        "type": "object",
-        "properties": {"query": {"type": "string", "description": "关键词"}},
-        "required": ["query"],
-    },
-)
-async def search(args: dict, ctx: SkillContext) -> str:
-    hits = await self._search(args["query"])
-    return "\\n".join(f"{h.id} {h.title} {h.size}" for h in hits[:10])
+async def on_load(self):
+    # 把 /byrdocs search 这个命令挂给 AI；参数 schema 与说明都从命令里取
+    self.register_skill("search", command="byrdocs.search")
 ```
 
-几条规矩（都是踩过的坑）：
+执行时走 **`CommandManager.handle()`**（合成一条真实消息事件），所以
+**权限、作用域、Schema 校验、错误反馈**与用户手敲完全同一条路径。
+结果由命令的返回值发出，AI 不说话、也不接收它的输出（委派语义）。
+
+几条规矩：
 
 * **名字全局唯一**：注册名是 `插件名.技能名`，暴露给模型时转成 `插件名_技能名`
-  （OpenAI 的函数名只允许 `[a-zA-Z0-9_-]`，点号不合法）；
-* **返回字符串**：调用方会截断到上限后塞进工具结果 —— 返回结构体也行，
-  会 `json.dumps` 成字符串（模型读文本，读不了对象）；
-* **异常不要自己吞**：抛出去，调用方会把它变成「技能执行失败：…」交给模型，
-  模型能因此换个问法重试；吞掉只会让它以为成功；
-* **别假设调用者是人**：`ctx` 里带调用者身份（谁、在哪个群/私聊、是不是超管），
-  需要权限就自己判 —— 这个框架**不替**技能判权限，因为只有你知道
-  「谁能搜内部资料」。
+  （OpenAI 的函数名只允许 `[a-zA-Z0-9_-]`）；
+* **只映射自己插件的命令**（防止把别人的命令包装成自己的技能绕过权限）；
+* **命令不存在就不注册**（插件还没注册命令时别硬挂，`SkillRegistry.resolve`
+  会在消费侧再查一次，查不到就跳过，模型不会看到死工具）。
 """
 from __future__ import annotations
 
@@ -78,25 +68,28 @@ class SkillContext:
 
 @dataclass
 class Skill:
-    """一个可被模型调用的技能。"""
+    """一个可被模型触发的**命令映射**。"""
 
     #: 注册名：`插件名.技能名`（唯一）
     name: str
-    description: str
-    #: JSON Schema（object）。`{type: object, properties: {...}}`
-    parameters: dict
-    handler: Callable[[dict, SkillContext], Any]
+    #: 被映射的命令（`父.子`，与 `register_command` 里的名字一致）
+    command: str
     #: 提供它的插件
     plugin: str = ""
+    #: 说明（不给就用命令自己的 description）
+    description: str = ""
 
     @property
     def tool_name(self) -> str:
         """给模型看的函数名（点号换成下划线，只留合法字符）。"""
         return _TOOL_NAME_RE.sub("_", self.name)[:64]
 
+    def command_line(self) -> str:
+        """/byrdocs search（命令名里的点换成空格，即用户手敲的样子）。"""
+        return "/" + str(self.command or "").replace(".", " ")
+
     def describe(self) -> str:
-        first = (self.description or "").strip().splitlines()[0] if self.description else ""
-        return f"`{self.name}` · {self.plugin} · {first[:60]}"
+        return f"`{self.name}` → {self.command_line()} · {self.plugin}"
 
 
 class SkillRegistry:
@@ -112,31 +105,49 @@ class SkillRegistry:
 
     # ---- 注册 ----
 
-    def register(self, plugin: str, name: str, *, description: str = "",
-                 parameters: Optional[dict] = None,
-                 handler: Optional[Callable] = None) -> Skill:
-        """注册一个技能（同名覆盖，按插件名可整批撤销）。"""
+    def register(self, plugin: str, name: str, *, command: str = "",
+                 description: str = "", cmds=None) -> Skill:
+        """把一个**已有命令**注册成技能（同名覆盖，按插件名可整批撤销）。
+
+        Args:
+            plugin: 提供方插件名（框架自动填）。
+            name: 技能名（暴露给模型时是 `插件名_技能名`）。
+            command: 被映射的命令全名，如 `"byrdocs.search"`。
+            description: 说明；不给就用命令自己的 description。
+
+        Raises:
+            ValueError: 名字非法、没给 command、或映射了**别人**的命令。
+        """
         full = self.qualify(plugin, name)
         if not _NAME_RE.match(full):
             raise ValueError(
                 f"技能名不合法：{full!r}（只允许字母数字、下划线、连字符、点，"
                 f"最长 64）")
-        if handler is None:
-            raise ValueError(f"技能 {full} 没有 handler")
-        schema = parameters if isinstance(parameters, dict) else {}
-        skill = Skill(name=full, description=str(description or ""),
-                      parameters=schema, handler=handler, plugin=plugin)
+        cmd = str(command or "").strip()
+        if not cmd:
+            raise ValueError(
+                f"技能 {full} 没有 command：技能只是「命令映射」，"
+                f"写法 self.register_skill({name!r}, command=\"插件名.命令\")")
+        # 归属校验靠**命令自己记的 plugin 字段**，不靠命名空间猜：
+        # `bupt_news` 插件的命令叫 `buptnews.*`（名字和插件名并不相同），
+        # 按前缀比对会把正常映射误杀。
+        # 命不存在的命令在这里**不报错**（插件可能稍后才注册命令），
+        # 消费侧每次 `find_command()` 解析，解析不到就不暴露。
+        if cmds is not None and hasattr(cmds, "find_command"):
+            found = cmds.find_command(cmd)
+            handler = found[1] if found else None
+            owner = getattr(handler, "plugin", "") if handler is not None else ""
+            if owner and plugin and owner != plugin:
+                raise ValueError(
+                    f"技能 {full} 映射了别的插件的命令 {cmd}"
+                    f"（它属于 {owner}，应由那个插件自己注册技能）")
+        skill = Skill(name=full, command=cmd, plugin=plugin,
+                      description=str(description or ""))
         self._skills[full] = skill
         if self.logger:
-            self.logger.info("[skills] %s 注册技能 %s", plugin, full)
+            self.logger.info("[skills] %s 注册技能 %s → %s",
+                             plugin, full, skill.command_line())
         return skill
-
-    def decorator(self, plugin: str, name: str, **kwargs):
-        """`@self.register_skill(...)` 的装饰器形态。"""
-        def deco(func):
-            self.register(plugin, name, handler=func, **kwargs)
-            return func
-        return deco
 
     @staticmethod
     def qualify(plugin: str, name: str) -> str:
@@ -184,21 +195,3 @@ class SkillRegistry:
         if gone and self.logger:
             self.logger.info("[skills] %s 撤销了 %d 个技能", plugin, len(gone))
         return len(gone)
-
-
-async def call_skill(skill: Skill, args: dict, ctx: SkillContext) -> str:
-    """执行技能并归一化返回值；异常**原样抛出**（由调用方决定怎么告诉模型）。"""
-    result = skill.handler(dict(args or {}), ctx)
-    if inspect.isawaitable(result):
-        result = await result            # type: ignore[assignment]
-    if result is None:
-        return ""
-    if isinstance(result, str):
-        return result
-    if isinstance(result, (dict, list, tuple, int, float, bool)):
-        import json
-        try:
-            return json.dumps(result, ensure_ascii=False)
-        except (TypeError, ValueError):
-            return str(result)
-    return str(result)

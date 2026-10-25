@@ -3605,116 +3605,81 @@ async def test_targets_commands(tmp: Path):
 
 
 async def test_skills(tmp: Path):
-    print("\n[27] ai_chat 技能：检索/最近/详情 + 权限")
+    print("\n[27] ai_chat 技能：命令映射（只读面是否补齐）")
     from napcat.command import CommandManager
     from napcat.permission import PermissionManager
-    from napcat.skills import SkillContext, call_skill
     from plugins.bupt_news.main import BuptNewsPlugin
-    from plugins.bupt_news.skills import register as register_skills
-    from plugins.bupt_news.store import StateStore
 
     d = tmp / "skills"
     d.mkdir(parents=True, exist_ok=True)
     perm = PermissionManager()
     perm.set_superusers([1])
-    plugin = BuptNewsPlugin(api=None, event_bus=None, timer=None,
+    from napcat.events import TimerManager
+    timer = TimerManager()
+    plugin = BuptNewsPlugin(api=None, event_bus=None, timer=timer,
                             cmd_manager=CommandManager(perm_manager=perm),
                             perm_manager=perm, file_manager=None,
                             logger=_logger(), groups=None,
-                            cfg=_FakeCfg({"plugins": {"bupt_news": {
-                                "data_dir": str(d), "enabled": False,
-                                "targets": {"users": {"100000555": {
-                                    "message": True}}}}}}))
+                            cfg=_FakeCfg({"plugins": {
+                                "bupt_news": {"data_dir": str(d),
+                                              "enabled": False}}}))
     await plugin.on_load()
-    plugin._store = StateStore(str(d / "state.json"), str(d / "notices.jsonl"))
-    nid = plugin._store.add_notice({
-        "newsid": "1", "treeid": "1154", "title": "关于麻腮风疫苗补种的通知",
-        "body": "请大一新生于本周五到校医院接种麻腮风疫苗。",
-        "summary": "新生疫苗补种", "summary_ai": True, "student_ai": True,
-        "for_students": True, "dept": "后勤部", "date": "2026-10-20",
-        "images": [], "tables": [],
-        "url": "http://my.bupt.edu.cn/x.jsp?wbnewsid=1"})
-
-    n = register_skills(plugin)
-    check("★ 注册了 4 个技能", n == 4, str(n))
+    timer.start()
+    await plugin.on_enable()        # 技能在 on_enable 里注册（命令也是）
+    cmds = plugin.cmds
     skills = {s.name: s for s in plugin.skills.list()}
-    check("技能名带插件前缀（全局唯一）",
-          all(name.startswith("bupt_news.") for name in skills), str(sorted(skills)))
-    check("★ 暴露给模型的名字只含合法字符",
-          all(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", s.tool_name) for s in skills.values()),
-          str([s.tool_name for s in skills.values()]))
+    check("★ 注册了 5 个技能（只读面齐全）",
+          set(skills) == {"bupt_news.search", "bupt_news.recent",
+                          "bupt_news.notice", "bupt_news.pins",
+                          "bupt_news.status"}, str(sorted(skills)))
 
-    # 新规范：技能**自己回消息**（`ctx.send`），返回值只给模型一句短确认。
-    sent: list[str] = []
+    expected = {
+        "bupt_news.search": "buptnews.search",
+        "bupt_news.recent": "buptnews.list",
+        "bupt_news.notice": "buptnews.get",
+        "bupt_news.pins": "buptnews.pin",
+        "bupt_news.status": "buptnews.status",
+    }
+    check("★ 每个技能都映射到本插件的真实命令",
+          all(skills[k].command == v for k, v in expected.items()),
+          str({k: skills[k].command for k in skills}))
+    check("★ 映射的命令都能解析到（不会暴露死工具）",
+          all(cmds.find_command(skills[k].command) for k in expected),
+          str([k for k in expected if not cmds.find_command(skills[k].command)]))
+    import re as _re
+    check("★ 工具名合法（OpenAI 函数名约束）",
+          all(_re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sk.tool_name) for sk in skills.values()),
+          str([sk.tool_name for sk in skills.values()]))
 
-    async def _fake_send(msg):
-        sent.append(str(msg))
+    # 参数 schema 从命令的 Schema 翻译，不另写一份
+    from plugins.ai_chat.tools import command_tool_schema
+    recent_handler = cmds.find_command("buptnews.list")[1]
+    props = command_tool_schema(recent_handler)["properties"]
+    check("★ recent 的参数来自 list 的命令 Schema（page/scope）",
+          {"page", "scope"} <= set(props), str(sorted(props)))
+    check("scope 是枚举（模型看得到 acts/all 这些可选值）",
+          props["scope"].get("enum") and "acts" in props["scope"]["enum"],
+          str(props["scope"]))
+    notice_props = command_tool_schema(cmds.find_command("buptnews.get")[1])["properties"]
+    check("notice 的参数来自 get 的命令 Schema（id）", "id" in notice_props,
+          str(sorted(notice_props)))
 
-    sup = SkillContext(caller="ai_chat", user_id=1, is_superuser=True,
-                       send=_fake_send)
-    allowed = SkillContext(caller="ai_chat", user_id=100000555, send=_fake_send)
-    outsider = SkillContext(caller="ai_chat", user_id=100000999, send=_fake_send)
+    # 写操作**不能**被模型触发（这是"只读面"的边界）
+    for forbidden in ("buptnews.add", "buptnews.set", "buptnews.del",
+                      "buptnews.dektoken", "buptnews.on", "buptnews.off",
+                      "buptnews.interval", "buptnews.sync", "buptnews.images"):
+        check(f"写操作 {forbidden} 没有被挂成技能",
+              forbidden not in {sk.command for sk in skills.values()}, "")
 
-    sent.clear()
-    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, sup)
-    check("★ search 把**结果发给用户**（编号/日期/摘要）",
-          sent and f"#{nid}" in sent[-1] and "2026-10-20" in sent[-1]
-          and "新生疫苗补种" in sent[-1], (sent[-1] if sent else "")[:100])
-    check("★ search 只给模型一句短确认（不整篇回灌）",
-          "已把" in out and len(out) < 60, out[:80])
-    sent.clear()
-    out = await call_skill(skills["bupt_news.search"], {"query": "不存在的词"}, sup)
-    check("search 无命中给出明确说明", "没有搜到" in out, out[:60])
-    check("无命中时不发消息（让模型自己说）", sent == [], str(sent))
-    sent.clear()
-    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, outsider)
-    check("★ 未授权用户调 search 被拒",
-          "没有对当前用户" in out, out[:60])
-    check("未授权时不发消息", sent == [], str(sent))
-    sent.clear()
-    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, allowed)
-    check("授权用户（在 targets 里）可以搜", bool(sent), str(sent)[:60])
-
-    sent.clear()
-    out = await call_skill(skills["bupt_news.recent"], {}, sup)
-    check("recent 把通知发给用户", sent and f"#{nid}" in sent[-1], str(sent)[:80])
-    sent.clear()
-    await call_skill(skills["bupt_news.recent"], {"limit": 1}, sup)
-    check("recent 支持 limit",
-          sent and len([ln for ln in sent[-1].splitlines() if ln.startswith("#")]) == 1,
-          str(sent)[:80])
-
-    sent.clear()
-    out = await call_skill(skills["bupt_news.notice"], {"id": f"#{nid}"}, sup)
-    check("★ notice 把详情发给用户（部门/日期/正文/原文链接）",
-          sent and "后勤部" in sent[-1] and "2026-10-20" in sent[-1]
-          and "校医院" in sent[-1] and "wbnewsid=1" in sent[-1],
-          (sent[-1] if sent else "")[:120])
-    check("★ notice 给模型的确认很短", "已把通知" in out and len(out) < 40, out[:60])
-    sent.clear()
-    out = await call_skill(skills["bupt_news.notice"], {"id": "999999"}, sup)
-    check("notice 编号不存在时说明保留范围",
-          "没有编号" in out and "500" in out, out[:80])
-    out = await call_skill(skills["bupt_news.notice"], {"id": "abc"}, sup)
-    check("notice 非数字编号给出提示", "数字" in out, out[:60])
-
-    sent.clear()
-    out = await call_skill(skills["bupt_news.activities"], {}, sup)
-    check("没有活动绑定时 activities 说明原因", "绑定" in out, out[:80])
-    out = await call_skill(skills["bupt_news.activities"], {}, allowed)
-    check("★ activities 只给超管（绑定账号的个人数据）",
-          "只对超级用户开放" in out, out[:60])
-
-    # 没有 send 通道（测试/独立调用）时退化成返回全文
-    bare = SkillContext(caller="ai_chat", user_id=1, is_superuser=True)
-    out = await call_skill(skills["bupt_news.search"], {"query": "疫苗"}, bare)
-    check("★ 没有 ctx.send 时退化为返回全文",
-          f"#{nid}" in out and "共 1 条命中" in out, out[:80])
-
-    # 停用/卸载时技能要被撤掉，否则模型会摸到死函数
-    plugin.skills.unregister("bupt_news.search")
-    check("技能可单独注销",
-          "bupt_news.search" not in {s.name for s in plugin.skills.list()}, "")
+    # 权限：技能只是映射，判定仍由命令系统做（普通用户拿不到 superuser 命令）
+    from napcat.command import CommandPacket
+    from napcat.models import MessageEvent
+    ev = MessageEvent(message_type="private", user_id=100000999,
+                      message=[{"type": "text", "data": {"text": "/buptnews status"}}],
+                      raw_message="/buptnews status")
+    res = await cmds.handle(ev)
+    check("★ 普通用户触发 superuser 命令 → 统一「未知命令」口径",
+          isinstance(res, tuple) and res[0] == "_not_found", repr(res)[:60])
 
 
 async def _cleanup_artifacts():

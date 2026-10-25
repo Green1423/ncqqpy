@@ -1,110 +1,59 @@
-# 十七、技能（把能力交给 AI 用）
+# 十七、技能（把你的**命令**交给 AI 用）
 
 > 上级：[插件开发](README.md) · 相关：[命令](04-commands.md) · [ai_chat 的工具](../plugins/ai-chat/08-tools.md)
 
-**命令给「人」用，技能是「AI 转交」**：用户说人话 → AI 把它变成一次技能调用 →
-**插件自己执行并回消息**，AI 不接话、也不转述插件的输出（`ctx.send` 就是回话通道）。
-
-（早先的设计是「技能结果回喂给 AI 让 AI 总结」，2026-10-25 按用户要求改成上面的委派语义。）
-
- 注册一个技能，装了 `ai_chat` 之后，
-模型在对话里就能**主动调用**你插件的功能 —— 不用人先敲命令、再把结果告诉它。
-
-典型场景：群里有人问「有没有线代的真题」，`byrdocs` 注册了搜索技能，模型直接查。
-
-## 17.1 注册
+**命令给「人」敲，技能让 AI 也能触发同一条命令。** 技能不是另写一套 handler ——
+它只是**一行命令映射**：
 
 ```python
 async def on_load(self):
-    @self.register_skill(
-        "search",
-        description=("在 BYR Docs 资料库里搜索。用户问「有没有某某课的资料/真题」时用它。"
-                     "返回编号、标题、类型、大小。"),
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "关键词"},
-                "limit": {"type": "integer", "description": "最多几条，默认 8"},
-            },
-            "required": ["query"],
-        },
-    )
-    async def _skill_search(args: dict, ctx):
-        hits = await self._search(args["query"], limit=int(args.get("limit") or 8))
-        return "\n".join(f"{i}. {h.title}" for i, h in enumerate(hits, 1))
+    self.register_skill("search", command="byrdocs.search")
 ```
 
-`description` 与 `parameters` 是**给模型看的**：写得越像「什么时候该用我」，
-模型越会用对。`parameters` 就是 OpenAI 的 JSON Schema。
-
-## 17.2 三条硬约束
-
-| 约束 | 为什么 |
+| 项 | 来源 |
 |---|---|
-| 名字全局唯一（`插件名.技能名`），暴露给模型时点号换成 `_` | OpenAI 函数名只允许 `[a-zA-Z0-9_-]`；点号不合法 |
-| 返回**字符串**（dict/list 会被 `json.dumps`） | 工具结果是文本，模型读不了对象 |
-| **异常抛出去**，不要自己吞 | 调用方会把它变成「技能执行失败：…」交给模型，模型能换法子重试；吞掉只会让它以为成功 |
+| 参数 schema | 直接取 `byrdocs.search` 的 **`CommandSchema`**（不另写一份，永不漂移） |
+| 说明 | 取命令的 `description` |
+| 执行 | 走 **`CommandManager.handle()`**（合成一条真实消息事件） |
+| 权限 / 作用域 / 白名单 | **完全按命令判定** —— AI 这条路不绕过任何检查 |
+| 回复 | 命令的返回值（`/byrdocs search` 回什么就发什么） |
+| AI | 不说话、不接收命令输出（委派语义） |
 
-结果超过 3000 字会被截断（模型读不动更长的东西），所以**返回前先挑重点** ——
-跟命令行里回一大段消息是两回事。
+## 17.1 规矩
 
-## 17.3 调用上下文
+* **只能映射自己的命令**（`byrdocs.search` 的 owner 是 `byrdocs`）；
+  顶层命令（`/ban` 那种）不校验归属 —— 名字上看不出主人；
+* **命令不存在就不暴露**：消费方（`ai_chat`）每次按 `find_command()` 解析，
+  解析不到或 `disabled` 就跳过，模型看不到死工具；
+* **不需要写 handler**：`register_skill()` 返回 `Skill`，不接收函数；
+* 卸载/禁用/热重载时框架按插件名整批撤销。
 
-第二个参数是 `SkillContext`：
+## 17.2 消费方：ai_chat 侧
 
-```python
-@dataclass
-class SkillContext:
-    caller: str          # 谁在调（一般是 "ai_chat"）
-    user_id: int         # 真实用户
-    group_id: int
-    is_group: bool
-    session_id: str      # 调用方的会话 id
-    is_superuser: bool   # 调用方已经判过的结论，可以直接用
-    is_admin: bool
-    extra: dict
-```
+`ai_chat` 把每个技能包成一个**委派型工具**（`delegates=True`）：
 
-**框架不替你判权限**：只有你知道「谁能查内部资料」。按 `ctx` 自己判，
-并用 `return "没有权限"` 或抛异常告诉模型。
+1. 模型决定调用 → `ai_chat` 合成一条以**当前用户身份**发的消息
+   （`/<命令> --键=值`）→ `CommandManager.handle()`；
+2. 命令系统按自己的权限/作用域判定：不通过就是「未知命令」口径；
+3. 通过 → 执行命令 → 把返回值发给用户；
+4. `ai_chat` **结束本轮**，不接话、不把命令输出喂回模型。
 
-> 别以为「技能只会在群里被调」：同一个模型在私聊里也能调。服务范围白名单要
-> 自己在技能里再判一次 —— `byrdocs` 就是这么做的（`_skill_allowed`）。
-
-## 17.4 生命周期
-
-* 热重载、禁用、卸载时，框架会把**该插件注册的所有技能**撤掉（与命令同一套
-  回收路径）—— 不会留下指向死 handler 的工具；
-* `ai_chat` 每轮**重新读**技能表，所以新装的插件注册的技能下一轮就能用；
-* ⚠️ **技能通道本身是框架代码**（`napcat/skills.py` + `PluginBase`）：装了新版框架后
-  要 **重启一次进程**（`systemctl restart ncqqpy`）才生效 —— 热重载只换插件代码。
-  没重启时插件会打一行警告并跳过技能注册，其他功能照常（不会因此加载失败）；
-* 同名技能以**后注册**的为准（`register` 覆盖），插件名相同会覆盖自己。
-
-## 17.5 消费方：ai_chat 侧怎么接
-
-`ai_chat` 通过 `register_skill_tools()` 把技能包成工具，过滤口径在
-`skills` 配置段：
+配置（`config.json → plugins.ai_chat.skills`）：
 
 ```json
-"skills": {"enabled": true, "allow": [], "deny": []}
+{"enabled": true, "allow": [], "deny": ["byrdocs.search"]}
 ```
 
-| 键 | 含义 |
-|---|---|
-| `enabled` | 全关（一个技能都不接） |
-| `allow` | 非空时只接名单里的（全名，如 `byrdocs.search`） |
-| `deny` | 排除名单里的（`allow` 为空时生效） |
-
-`ai_chat` **不会**接自己注册的技能（避免自我递归），同名以内置工具为准。
-
-## 17.6 调试
+## 17.3 调试
 
 ```python
-self.skills.list()          # 现在有哪些技能
-self.skills.get("byrdocs.search")
-self.skills.unregister_plugin("byrdocs")   # 手工撤掉（一般不用，框架会做）
+self.skills.list()                       # 现在有哪些技能
+self.skills.get("byrdocs.search")        # 单个
+self.skills.unregister_plugin("byrdocs") # 手工撤（一般不用，框架会做）
 ```
 
-在对话里问一句「你现在有哪些工具」，模型会从工具表里报出来 —— 这是最直接的
-端到端验证（比看日志快）。
+最直接的端到端验证：在对话里说一句本该由那个插件处理的话（「帮我查查学校的通知」），
+看回消息的是不是那个插件（AI 不该额外接话）。
+
+> ⚠️ 技能通道是**框架代码**：换框架版本要**重启进程**才生效（热重载只换插件）。
+> 旧进程里插件会打一行警告并跳过技能注册，命令不受影响。
