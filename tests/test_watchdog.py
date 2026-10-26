@@ -3213,8 +3213,10 @@ async def test_afterclass(tmp: Path):
                         for part in parts for seg in part.build())
     check("★ get 标题行只有一个编号",
           head_text.count("#7") == 1, head_text.splitlines()[0][:60])
-    rec_p, prefix_p, _ = await plugin._load_reference("P1")
-    check("P 编号仍带前缀（置顶号不能丢）", prefix_p.startswith("P1"), prefix_p)
+    rec_p, prefix_p, err_p = await plugin._load_reference("P1")
+    check("P 编号仍带前缀（置顶号不能丢）",
+          (rec_p is None and "置顶" in err_p) or prefix_p.startswith("P1"),
+          f"{prefix_p!r} {err_p!r}")
     rec_l, prefix_l, _ = await plugin._load_reference("7")
     check("★ 本地编号不再重复塞进 prefix", prefix_l == "", repr(prefix_l))
 
@@ -3645,18 +3647,23 @@ async def test_skills(tmp: Path):
     await plugin.on_enable()        # 技能在 on_enable 里注册（命令也是）
     cmds = plugin.cmds
     skills = {s.name: s for s in plugin.skills.list()}
-    check("★ 注册了 5 个技能（只读面齐全）",
+    # 只挂 3 条：pin/status **故意不挂** —— `pin` 不带参数时列置顶，
+    # 与 list 语义重叠，实测模型会拿它回答「p1 的详情」，回来一串清单。
+    check("★ 注册了 3 个技能（只读、语义不重叠）",
           set(skills) == {"bupt_news.search", "bupt_news.recent",
-                          "bupt_news.notice", "bupt_news.pins",
-                          "bupt_news.status"}, str(sorted(skills)))
+                          "bupt_news.notice"}, str(sorted(skills)))
 
     expected = {
         "bupt_news.search": "buptnews.search",
         "bupt_news.recent": "buptnews.list",
         "bupt_news.notice": "buptnews.get",
-        "bupt_news.pins": "buptnews.pin",
-        "bupt_news.status": "buptnews.status",
     }
+    for not_hung in ("bupt_news.pins", "bupt_news.status"):
+        check(f"★ 不挂语义重叠/管理类技能（{not_hung}）",
+              not_hung not in skills, str(sorted(skills)))
+    check("★ 每个技能都带「什么时候该用我」的说明",
+          all("【仅在" in (sk.description or "") for sk in skills.values()),
+          str({k: (sk.description or "")[:12] for k, sk in skills.items()}))
     check("★ 每个技能都映射到本插件的真实命令",
           all(skills[k].command == v for k, v in expected.items()),
           str({k: skills[k].command for k in skills}))
