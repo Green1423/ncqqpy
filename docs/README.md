@@ -91,6 +91,7 @@ docs/
 | 文档 | 内容 |
 |------|------|
 | [sqlite ORM](reference/store.md) | `napcat.store`：模型、字段、查询、事务、迁移边界 |
+| [NapCat API 覆盖](reference/napcat-api.md) | `ApiClient` 对官方 178 个 action 的覆盖表与字段约定 |
 | [看门狗](reference/watchdog/README.md) | 断线自动重启 + 扫码恢复的唯一状态机、配置与排障 |
 | [DSH 内部机制](reference/dsh-internals/README.md) | DSH 的消息投影、会话日志、系统提示与上下文压缩（`ai_chat` 的语义依据） |
 | [ai_chat 实现参考](reference/ai-chat/README.md) | Markdown 渲染、持久化、测试、import 纪律、框架改动、DSH 映射 |

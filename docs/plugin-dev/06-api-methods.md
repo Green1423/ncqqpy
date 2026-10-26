@@ -2,6 +2,8 @@
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[全部事件类型](05-event-types.md) · 下一章：[权限管理](07-permissions.md)
 
+> 下面只列常用方法；完整覆盖（178 个 action）与字段名对照见 [NapCat API 覆盖表](../reference/napcat-api.md)。
+
 
 ## 6.1 消息
 

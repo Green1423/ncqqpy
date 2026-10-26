@@ -2,6 +2,8 @@
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[使用指南](README.md) · 上一章：[事件系统](04-events.md) · 下一章：[命令系统](06-commands.md)
 
+> 完整方法清单（官方 178 个 action 全覆盖）见 [NapCat API 覆盖表](../reference/napcat-api.md)。
+
 
 `client.api` 提供 100+ 方法，**自动提取响应 `data` 字段**，失败抛出 `ApiError`。
 

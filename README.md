@@ -113,6 +113,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_docs.py` | 覆盖 |
 | `tests/test_docstrings.py` | 覆盖 |
 | `tests/test_watchdog_online.py` | 覆盖 |
+| `tests/test_api_coverage.py` | 覆盖 |
 
 ## 目录
 
