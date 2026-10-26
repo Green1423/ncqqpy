@@ -130,6 +130,23 @@ def test_taxonomy():
     check("同插件同类型的编号稳定（便于 grep 日志）", same[0] == same[1], str(same))
     other = rep.code(PluginTimeoutError("a"), "p2")
     check("不同插件编号不同", other != same[0], f"{other} vs {same[0]}")
+    # ★ 编号必须区分**根因**：框架会把任何未分类异常包成 PluginRuntimeError，
+    #   早先只看外层类型 → 413 和 DNS 失败同一个编号（线上 E-91b4 就是这种），
+    #   grep 日志分不清。这里要求「同根因同号、不同根因不同号」。
+    from napcat.errors import error_code
+    class _Cause(Exception):
+        kind = "运行错误"
+
+    class _Boom(Exception):
+        def __init__(self, msg, status=0):
+            super().__init__(msg)
+            self.status = status
+
+    a = error_code(PluginRuntimeError("x", plugin="p", cause=_Boom("HTTP 413", 413)), "p")
+    b = error_code(PluginRuntimeError("x", plugin="p", cause=_Boom("HTTP 413", 413)), "p")
+    c = error_code(PluginRuntimeError("x", plugin="p", cause=_Boom("DNS 挂")), "p")
+    check("同根因编号稳定", a == b, f"{a} vs {b}")
+    check("不同根因编号不同（413 vs DNS）", a != c, f"{a} vs {c}")
 
 
 # ==================== 2-3. 命令 / 事件失败一定有回应 ====================

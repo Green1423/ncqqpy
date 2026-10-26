@@ -36,11 +36,13 @@
 | `notify.on_reconnect` | `true` | 恢复通知 |
 | `notify.on_qrcode` | `true` | 二维码通知 |
 | `notify.on_launch_failed` | `true` | 拉起失败追加告警 |
-| `notify.on_login_ok` | `true` | 登录成功后发反馈 |
-| `offline_grace_seconds` | `25` | **抖动抑制观察期**：掉线不足这个时长就恢复 → 不发任何通知 |
-| `qrcode_follow_launch` | `true` | 每次拉起服务端后跟进登录二维码 |
-| `restart_on_startup` | `true` | 程序启动后执行一次重启 |
-| `startup_restart_delay` | `10.0` | 启动后等这么久再重启（期间掉线则提前进入恢复流程） |
+| `notify.on_login_ok` | `true` | 登录成功后发反馈；仅当本轮真的发过「掉线」通知时才发（抖动自行恢复不报）|
+| `restart_on_startup` | `true` | 程序启动后执行一次恢复流程；`startup_restart_check` 打开时，已在线（online+good）则跳过 |
+| `startup_restart_delay` | `10.0` | 启动后等这么久再判断/重启（期间掉线则提前进入恢复流程） |
+| `startup_restart_check` | `true` | 启动重启前先探测是否已在线；已在线则不重启服务端（避免踢掉已登录会话、强制重新扫码） |
+| `startup_restart_probe_attempts` | `3` | 探测重试次数（防一次 `get_status` 超时误判） |
+| `startup_restart_probe_interval` | `1.0` | 探测重试间隔（秒） |
+| `reconnect_grace` | `30.0` | 连接断开后的观察期：这段时间内 WebSocket 自行恢复就不重启服务端；`0` = 立即恢复（旧行为） |
 | `qrcode_after_launch_delay` | `20.0` | **拉起后等这么久再发二维码**（给 QQ 启动 + 出码留时间） |
 | `health_check` | `true` | 是否每 5 秒主动 `get_status` |
 | `health_interval` | `5.0` | 健康检查间隔（秒） |

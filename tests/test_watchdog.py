@@ -540,6 +540,7 @@ async def test_login_feedback(tmp: Path):
     wd.notifier.send_text = fake_text
     wd._offline_since = time.time() - 30
     wd._offline_count = 1
+    wd._notified_offline = True          # 本轮确实发过「掉线」通知
     await wd._on_reconnected()
     check("恢复后发出「登录成功」反馈", bool(sent), f"{sent}")
     check("反馈文案含登录成功", bool(sent) and "登录成功" in sent[0], f"{sent[:1]}")
@@ -548,6 +549,7 @@ async def test_login_feedback(tmp: Path):
     await wd._on_reconnected()
     check("已在线时不重复反馈", sent == [], f"{sent}")
     wd._offline_since = time.time() - 30
+    wd._notified_offline = True
     wd._last_login_notify = time.time()
     await wd._on_reconnected()
     check("冷却期内不重复反馈", sent == [], f"{sent}")
@@ -3200,6 +3202,21 @@ async def test_afterclass(tmp: Path):
     check("关闭时状态行显示未开启",
           "未开启" in plugin._afterclass_status_line(),
           plugin._afterclass_status_line())
+
+    # (f2b) get 的标题行不能重复编号（线上出现过 `📢 #476 #476 标题`）
+    #       编号由 `_render_notice` 统一拼，`_load_reference` 的 prefix 只带
+    #       "渲染层不知道的信息"（P 置顶号 / 🔗 门户编号）。
+    head = await plugin._render_notice({"id": 7, "title": "标题A", "summary_ai": False},
+                                       prefix="", retry_summary=False)
+    parts = head if isinstance(head, list) else [head]
+    head_text = "".join(seg.get("data", {}).get("text", "")
+                        for part in parts for seg in part.build())
+    check("★ get 标题行只有一个编号",
+          head_text.count("#7") == 1, head_text.splitlines()[0][:60])
+    rec_p, prefix_p, _ = await plugin._load_reference("P1")
+    check("P 编号仍带前缀（置顶号不能丢）", prefix_p.startswith("P1"), prefix_p)
+    rec_l, prefix_l, _ = await plugin._load_reference("7")
+    check("★ 本地编号不再重复塞进 prefix", prefix_l == "", repr(prefix_l))
 
     # (f3) 免打扰时段：**连访问都不做**（不只是不推送）
     class _CountingDekt(_FakeDekt):

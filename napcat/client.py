@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import random
 import time
 import traceback
@@ -20,7 +21,7 @@ from .models import (
     GroupIncreaseEvent, GroupDecreaseEvent, GroupAdminEvent,
     parse_event,
 )
-from .api import ApiClient
+from .api import ApiClient, SentLog
 from .events import EventBus, TimerManager
 from .command import CommandManager
 from .permission import PermissionManager
@@ -707,7 +708,14 @@ class NapCatClient:
             self.watchdog = Watchdog(self, wd_cfg, logger=self.logger)
 
         # ---- 子系统 ----
-        self.api = ApiClient(self._ws)
+        # 自己发出消息的日志：引用「被切成几段」的推送时靠它还原全文/全部图片
+        # （`message_id` 不保证递增，所以按**发送顺序**分组，见 `SentLog`）
+        # 落盘位置：工作目录下的 `data/sent_log.json`（与其它运行期状态同处；
+        # 目录不存在时 `SentLog.save()` 自己建）
+        sent_log_path = os.environ.get("NCQQ_SENT_LOG") or os.path.join(
+            "data", "sent_log.json")
+        self.api = ApiClient(self._ws, sent_log=SentLog(sent_log_path,
+                                                        logger=self.logger))
         self.perm = PermissionManager(superusers=superusers or [])
         # 用户级权限覆盖（/userperm 写进 config.json 的 user_permissions）：
         # 非法条目只告警、不阻断启动 —— 配置是给人手改的。

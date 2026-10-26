@@ -8,6 +8,10 @@
 ```python
 async def on_load(self):
     self.register_skill("search", command="byrdocs.search")
+
+    # 想**自己发**结果（而不是让 ai_chat 转发）就再给一个 deliver：
+    self.register_skill("notice", command="buptnews.get",
+                        deliver=self._deliver_skill_output)
 ```
 
 | 项 | 来源 |
@@ -16,8 +20,9 @@ async def on_load(self):
 | 说明 | 取命令的 `description` |
 | 执行 | 走 **`CommandManager.handle()`**（合成一条真实消息事件） |
 | 权限 / 作用域 / 白名单 | **完全按命令判定** —— AI 这条路不绕过任何检查 |
-| 回复 | 命令的返回值（`/byrdocs search` 回什么就发什么） |
+| 回复 | 命令的返回值；**给了 `deliver` 就由插件自己发**（推荐，见 17.2） |
 | AI | 不说话、不接收命令输出（委派语义） |
+| 边界 | **只用来取数据**。用户已给内容（引用/粘贴）并要求解读、总结、翻译、改写、分析时，AI 应当自己回答 —— 转交后这轮就结束了，没人解释 |
 
 ## 17.1 规矩
 
@@ -27,6 +32,23 @@ async def on_load(self):
   解析不到或 `disabled` 就跳过，模型看不到死工具；
 * **不需要写 handler**：`register_skill()` 返回 `Skill`，不接收函数；
 * 卸载/禁用/热重载时框架按插件名整批撤销。
+
+## 17.1a 由谁把结果发给用户
+
+命令的产物可能是 `str`、`MessageChain`、**`list[MessageChain]`**（长通知分段）或
+段列表 —— 分段、图片、@ 的规矩只有插件自己知道。所以**推荐插件自己发**：
+
+```python
+async def _deliver_skill_output(self, payload, ctx):
+    # ctx.user_id / ctx.group_id / ctx.is_group 都在；用你自己的 api 发
+    for chain in (payload if isinstance(payload, list) else [payload]):
+        ...
+        await self.api.send_private_msg(str(ctx.user_id), chain)
+```
+
+没给 `deliver` 时会退回 ai_chat 的默认发送（简单输出够用，但猜不出你的分段规则）。
+**这个坑实测踩过两次**：chain 列表被当段列表 → 整条通知一个字都没发出去，
+用户只收到一句「执行完了，但没有返回内容」。
 
 ## 17.2 消费方：ai_chat 侧
 

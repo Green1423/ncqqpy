@@ -467,7 +467,8 @@ class PluginBase(ABC):
     # ---- 技能（把能力交给 AI 用，见 napcat.skills）----
 
     def register_skill(self, name: str, *, command: str = "",
-                       description: str = "") -> "Skill":
+                       description: str = "",
+                       deliver=None) -> "Skill":
         """把你的**一条命令**挂给 AI 使用（技能 = 命令映射，不另写 handler）。
 
             async def on_load(self):
@@ -484,7 +485,7 @@ class PluginBase(ABC):
         # 归属校验是「能校验就更严」，不该因此让注册失败
         return self.skills.register(
             self.name, name, command=command, description=description,
-            cmds=getattr(self, "cmds", None))
+            cmds=getattr(self, "cmds", None), deliver=deliver)
 
     def unregister_skill(self, name: str) -> bool:
         return self.skills.unregister(self.skills.qualify(self.name, name))

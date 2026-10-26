@@ -84,6 +84,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 ./venv/bin/python -B tests/test_bool_short_flags.py  # 布尔参数简写（-y）
 ./venv/bin/python -B tests/test_docs.py             # 文档链接/索引
 ./venv/bin/python -B tests/test_docstrings.py       # docstring 规范
+./venv/bin/python -B tests/test_watchdog_online.py  # 看门狗启动/观察期回归
 ```
 
 其余套件（命令解析、帮助结构、权限覆盖）见 [`tests/README.md`](tests/README.md)。
@@ -111,6 +112,7 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 | `tests/test_bool_short_flags.py` | 覆盖 |
 | `tests/test_docs.py` | 覆盖 |
 | `tests/test_docstrings.py` | 覆盖 |
+| `tests/test_watchdog_online.py` | 覆盖 |
 
 ## 目录
 

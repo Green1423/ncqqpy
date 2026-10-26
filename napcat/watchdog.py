@@ -23,6 +23,11 @@
       "restart_command": "ncqq",
       "restart_cooldown": 180.0,
       "restart_clear_cache_dir": "/opt/ncqq/napcat/cache",
+      // 连接断开后先观察 reconnect_grace 秒，能自行重连就不重启服务端
+      "reconnect_grace": 30.0,
+      // 启动重启前先检查是否已在线（已在线则跳过，避免踢掉已登录会话）
+      "startup_restart_check": true,
+      "startup_restart_probe_attempts": 3,
       "watchdog": {
         "qrcode_paths": ["/opt/ncqq/napcat/cache/qrcode.png"],
         "qrcode_after_launch_delay": 20.0,
@@ -108,6 +113,7 @@ class Watchdog:
         self._qr_last_hash: str = ""            # 上次见到的二维码哈希（变了才发）
         self._health_failures: int = 0           # 连续健康检查失败次数
         self._health_task: asyncio.Task | None = None
+        self._grace_task: asyncio.Task | None = None     # 掉线观察期
         self._episode_task: asyncio.Task | None = None   # 当前恢复流程
         self._loop_task: asyncio.Task | None = None      # 常驻循环（单任务）
         self._wake = asyncio.Event()                     # 唤醒循环（启动重启/掉线）
@@ -142,8 +148,17 @@ class Watchdog:
         self.cfg.setdefault("health_interval", 5.0)
         self.cfg.setdefault("health_max_failures", 3)
         self.cfg.setdefault("restart_on_startup", True)
+        # 启动重启前先探一次「是不是已经在线」：已在线就不打扰（否则每次框架
+        # 重启都把已登录的 QQ 踢下线、逼用户重新扫码）。
+        self.cfg.setdefault("startup_restart_check", True)
+        # 探测重试：避免一次 get_status 超时就把在线会话判死
+        self.cfg.setdefault("startup_restart_probe_attempts", 3)
+        self.cfg.setdefault("startup_restart_probe_interval", 1.0)
         # 启动后先等这么久再重启（让首次连接先稳定，或先失败）
         self.cfg.setdefault("startup_restart_delay", 10.0)
+        # 连接断开后先等这么久，看 WebSocket 能否自己重连；
+        # 自行恢复就不重启服务端（重启 = 踢下线 + 重新扫码）。
+        self.cfg.setdefault("reconnect_grace", 30.0)
         # 拉起后固定等这么久再发（给 QQ 启动 + 出码留时间），到点**直接发**
         self.cfg.setdefault("qrcode_after_launch_delay", 20.0)
         self.cfg.setdefault("notify", {
@@ -220,11 +235,15 @@ class Watchdog:
     async def _on_connect_failed(self, attempt: int, exc: BaseException):
         """服务器压根连不上 —— 框架会据此拉起服务端，这里只记账。"""
         self._kick_episode(f"WebSocket 连接失败（连续 {attempt} 次）: "
-                           f"{type(exc).__name__}: {exc}")
+                           f"{type(exc).__name__}: {exc}", grace=True)
 
     async def _on_disconnected(self):
-        """连上过之后又断了（QQ 掉线 / 服务端重启 / 抖动）。"""
-        self._kick_episode("WebSocket 连接已断开")
+        """连上过之后又断了（QQ 掉线 / 服务端重启 / 抖动）。
+
+        先进入观察期（`reconnect_grace`）：框架自身会退避重连，很多「断开」只是
+        网络抖动，能自行恢复就不该重启服务端（重启意味着 QQ 重新扫码登录）。
+        """
+        self._kick_episode("WebSocket 连接已断开", grace=True)
 
     async def _on_reconnected(self):
         """连上了（说明 `get_login_info` 已经成功 —— QQ 登录态可用）。
@@ -234,14 +253,20 @@ class Watchdog:
         """
         if self._shutting_down:
             return
+        if self._grace_task is not None and not self._grace_task.done():
+            self._grace_task.cancel()
+        self._grace_task = None
         if self._offline_since <= 0:
             return
         latest = self._find_latest_qr()
         if latest:
             self._logged_in_hash = self._file_hash(Path(latest))
-        # 连接恢复 = 本轮结束：状态机据此收手
+        # 连接恢复 = 本轮结束：状态机据此收手。
+        # 只有本轮真的发过「掉线」通知才报平安 —— 抖动在观察期内自行恢复、
+        # 或没开掉线通知时，不该凭空冒出一条「QQ 已登录成功」。
+        notify_ok = self._notified_offline
         self._mark_online()
-        if self._notify_enabled("on_login_ok"):
+        if notify_ok and self._notify_enabled("on_login_ok"):
             with contextlib.suppress(Exception):
                 await self._notify_login_ok()
 
@@ -271,6 +296,7 @@ class Watchdog:
         self._offline_reason = ""
         self._notified_offline = False
         self._cycle = 0
+        self._health_failures = 0            # 新会话从干净状态开始计数
         self._qr_last_hash = ""              # 下一轮重新以「与上次不同」判定
         self._set_scan_waiting(False)        # 已登录：恢复正常退避
 
@@ -358,8 +384,12 @@ class Watchdog:
     # 只有这一个任务在推进恢复流程，不再有「拉起跟进 / 恢复跟进 / 定时巡检」
     # 多条路径互相抢（早期那套会重复发码、也会互相挡）。
     # ------------------------------------------------------------------
-    def _kick_episode(self, reason: str):
+    def _kick_episode(self, reason: str, *, grace: bool = False):
         """掉线入口：记账 + 请常驻循环跑一次恢复（回调里不能 await）。
+
+        `grace=True`：先等 `reconnect_grace` 秒看连接能否自行恢复；能恢复就不重启
+        服务端（避免网络抖动导致整台 QQ 重新登录）。
+        
 
         注意这里判断的是「**当前有没有恢复流程在跑**」，不能拿 `_mark_offline()`
         的返回值当闸门 —— `_offline_since` 会被置位直到真正登录成功，
@@ -368,9 +398,23 @@ class Watchdog:
         """
         if self._shutting_down:
             return
-        self._mark_offline(reason)        # 只记账/更新原因
+        first = self._mark_offline(reason)        # 只记账/更新原因
         if self._episode_running():
             self.logger.info("[watchdog] 恢复流程已在运行，本次触发只更新原因")
+            return
+        if self._grace_task is not None and not self._grace_task.done():
+            if grace:
+                self.logger.info("[watchdog] 掉线观察期内，等待连接自行恢复")
+                return
+            # 已确认异常（健康检查/手动触发）：终止观察期，立即恢复
+            self._grace_task.cancel()
+            self._grace_task = None
+        seconds = self._reconnect_grace() if grace else 0.0
+        if first and seconds > 0:
+            self.logger.warning(
+                f"[watchdog] 连接异常，先等 {seconds:.0f}s 看能否自行恢复"
+                "（不重启服务端）")
+            self._grace_task = self._spawn(self._grace_then_recover(reason, seconds))
             return
         self._request_episode(f"掉线：{reason}")
 
@@ -390,6 +434,29 @@ class Watchdog:
         """直接起一个恢复流程任务（供 `_run_loop` 调用）。"""
         self._episode_task = self._spawn(self._run_episode(trigger))
 
+    def _reconnect_grace(self) -> float:
+        return max(0.0, float(self.cfg.get("reconnect_grace", 30.0) or 0))
+
+    async def _grace_then_recover(self, reason: str, seconds: float):
+        """观察期结束：连接自行恢复就取消恢复流程，否则才重启服务端。"""
+        task = asyncio.current_task()
+        try:
+            await asyncio.sleep(seconds)
+            if self._shutting_down:
+                return
+            if getattr(self.client, "ws_connected", False):
+                self.logger.info("[watchdog] 连接已自行恢复，跳过重启")
+                self._mark_online()
+                return
+            if self._episode_running():
+                return
+            self._request_episode(f"掉线：{reason}（{seconds:.0f}s 内未恢复）")
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._grace_task is task:
+                self._grace_task = None
+
     async def _health_loop(self):
         """每 `health_interval` 秒主动 `get_status`，要求 `online` 且 `good`。
 
@@ -408,6 +475,10 @@ class Watchdog:
                 await asyncio.sleep(interval)
                 if self._shutting_down:
                     return
+                if self._episode_running():
+                    # 恢复流程正在跑：连接状态必然不稳定，重复计数只会制造噪声
+                    self._health_failures = 0
+                    continue
                 healthy, detail = await self._probe_status()
                 if healthy:
                     if self._health_failures:
@@ -473,10 +544,17 @@ class Watchdog:
                     with contextlib.suppress(asyncio.TimeoutError):
                         await asyncio.wait_for(self._wake.wait(), timeout=delay)
                 if not self._shutting_down:
-                    trigger = self._trigger or "程序启动后的自动重启"
-                    self._wake.clear()
-                    self._trigger = ""
-                    self._spawn_episode(trigger)
+                    if self._wake.is_set():
+                        # 等待期间已经掉线：走恢复流程（原因用掉线本身）
+                        trigger = self._trigger or "程序启动后的自动重启"
+                        self._wake.clear()
+                        self._trigger = ""
+                        self._spawn_episode(trigger)
+                    elif await self._should_skip_startup_restart():
+                        self.logger.info(
+                            "[watchdog] 启动时已经在线（online+good），跳过启动重启")
+                    else:
+                        self._spawn_episode("程序启动后的自动重启")
 
             # 主动健康检查与恢复流程并行：它只负责「发现问题就触发同一条链路」
             if self.cfg.get("health_check", True) and self._health_task is None:
@@ -500,6 +578,36 @@ class Watchdog:
         finally:
             self._loop_task = None
 
+    async def _should_skip_startup_restart(self) -> bool:
+        """启动重启前的在线判定：已在线就不重启服务端。
+
+        背景：登录态在 NapCat 进程里，重启 `ncqq` 等于把已登录的 QQ 踢下线，
+        下一次登录要重新扫码。所以「框架进程重启」不应该无条件再重启服务端。
+
+        判据与健康检查一致：WebSocket 已连接，且 `get_status` 返回
+        `online=true`、`good=true`。探测允许重试，避免一次超时误判。
+        """
+        if not self.cfg.get("startup_restart_check", True):
+            return False
+        if self._offline_since > 0:
+            return False                 # 启动期间已经掉线：必须恢复
+        if not getattr(self.client, "ws_connected", False):
+            self.logger.info("[watchdog] 启动检查：WebSocket 未连接，执行启动重启")
+            return False
+        checks = max(1, int(self.cfg.get("startup_restart_probe_attempts", 3) or 3))
+        gap = max(0.0, float(
+            self.cfg.get("startup_restart_probe_interval", 1.0) or 0))
+        detail = ""
+        for attempt in range(1, checks + 1):
+            healthy, detail = await self._probe_status()
+            if healthy:
+                return True
+            if attempt < checks and gap:
+                await asyncio.sleep(gap)
+        self.logger.info(
+            f"[watchdog] 启动检查：当前不健康（{detail}），执行启动重启")
+        return False
+
     def _spawn(self, coro) -> asyncio.Task:
         """启动后台任务并登记（关停时按集合逐个收掉）。"""
         task = asyncio.create_task(coro)
@@ -509,8 +617,12 @@ class Watchdog:
 
     async def _run_episode(self, trigger: str = "掉线恢复"):
         """重启 ncqq → 取二维码 → ilink 发送 → 等登录成功，直到成功或跑满轮次。"""
-        # 先登记自己：_kick_episode() 靠它判断「已有恢复流程在跑」
+        # 先登记自己：_kick_episode() 靠它判断「已有恢复流程在跑」；
+        # 同时取消掉线观察期，避免流程结束后又被观察期重复触发。
         self._episode_task = asyncio.current_task()
+        if self._grace_task is not None and not self._grace_task.done():
+            self._grace_task.cancel()
+        self._grace_task = None
         try:
             self.logger.warning(f"[watchdog] 开始恢复流程（{trigger}）")
             if self._offline_since <= 0:
@@ -863,6 +975,7 @@ class Watchdog:
             # 早期版本直接 return，导致 _offline_since 永不复位、每轮掉线都重发一次。
             self.logger.error(f"[watchdog] 掉线微信通知发送失败：{self.notifier.last_error}")
             return
+        self._notified_offline = True
 
         # 拉起失败告警由状态机在 `_restart_ncqq()` 里发（它知道是哪一轮、失败原因），
         # 这里只负责「掉线」这一条。

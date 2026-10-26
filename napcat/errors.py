@@ -196,8 +196,31 @@ def error_code(exc: BaseException, plugin: str = "") -> str:
     - 用户报「E-8f31」时，`grep E-8f31 日志` 就能找到全部同类失败；
     - 节流按这个编号分组，同一类失败不会把群刷屏。
     """
-    raw = f"{plugin}|{getattr(exc, 'kind', '')}|{type(exc).__name__}"
+    # ⚠️ 编号必须**区分原因**：早先只看「插件 + 分类 + 异常类型」，而框架会把
+    # 任何未分类异常包成 `PluginRuntimeError`，于是 HTTP 413、DNS 失败、解析错误
+    # 全是同一个编号（线上 E-91b4 同时对应过 413 和 DNS 两种完全不同的故障，
+    # grep 日志也分不清）。这里把**根因**（最内层异常的类型 + HTTP 状态码）
+    # 一起算进指纹：同一根因稳定同号，不同根因必然不同号。
+    root = _root_cause(exc)
+    status = getattr(exc, "status", None) or getattr(root, "status", None) or ""
+    raw = (f"{plugin}|{getattr(exc, 'kind', '')}|{type(exc).__name__}"
+           f"|{type(root).__name__}|{status}")
     return "E-" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:4]
+
+
+def _root_cause(exc: BaseException, limit: int = 8) -> BaseException:
+    """顺着 `cause` / `__cause__` / `__context__` 找到最内层异常。"""
+    cur = exc
+    seen: set[int] = set()
+    for _ in range(limit):
+        if id(cur) in seen:
+            break
+        seen.add(id(cur))
+        nxt = getattr(cur, "cause", None) or cur.__cause__ or cur.__context__
+        if nxt is None:
+            break
+        cur = nxt
+    return cur
 
 
 def _default_logger() -> logging.Logger:

@@ -11,6 +11,168 @@ from .models import (
 )
 
 
+#: `SentLog` 里每条记录保留多久（秒）—— 引用一般发生在几分钟内
+SENT_LOG_TTL = 6 * 3600
+#: 同一次「连续发送」的判定窗口（秒）：插件把一条长消息切成几段发，间隔很小
+SENT_LOG_GAP = 8.0
+
+
+class SentLog:
+    """机器人自己发出的消息：`message_id → {text, images, target, ts}`。
+
+    **为什么框架层做**：`message_id` 由服务端分配，**不保证递增**（用户实测过），
+    所以不能靠 `id±1` 找「同一条推送的下一段」。而发送方在发送那一刻就知道
+    完整内容，顺手记下最可靠。
+
+    分段还原靠**发送顺序 + 时间间隔**：同一目标、间隔 < `SENT_LOG_GAP` 的连续几条
+    视为一次推送的若干段（`block()`）。
+    """
+
+    def __init__(self, path: str = "", *, logger=None, max_entries: int = 600) -> None:
+        self.path = str(path or "")
+        self.logger = logger
+        self.max_entries = max(1, int(max_entries))
+        self._data: dict[str, dict] = {}
+        self._order: list[str] = []          # 发送顺序（id，保留重复则按插入）
+        if self.path:
+            self._load()
+
+    # ---- 落盘 ----
+
+    def _load(self) -> None:
+        import json
+        import os
+        if not os.path.exists(self.path):
+            return
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                got = json.load(f)
+            if isinstance(got, dict):
+                self._data = {str(k): v for k, v in got.items() if isinstance(v, dict)}
+                self._order = [str(x) for x in (got.get("__order__") or []) if str(x) in self._data]
+        except (OSError, ValueError):
+            self._data, self._order = {}, []
+
+    def save(self) -> None:
+        import json
+        import os
+        if not self.path:
+            return
+        while len(self._data) > self.max_entries:
+            old = self._order.pop(0) if self._order else next(iter(self._data))
+            self._data.pop(old, None)
+        payload = dict(self._data)
+        payload["__order__"] = self._order[-self.max_entries:]
+        tmp = self.path + ".tmp"
+        try:
+            import os as _os
+            parent = _os.path.dirname(self.path)
+            if parent:
+                _os.makedirs(parent, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            os.replace(tmp, self.path)
+        except OSError as e:
+            if self.logger:
+                self.logger.warning("[api] 发出消息日志落盘失败: %r", e)
+
+    # ---- 记录 ----
+
+    @staticmethod
+    def _parse_message(message) -> tuple[str, list]:
+        """把消息段解析成 `(纯文本, [图片地址])`。"""
+        if isinstance(message, str):
+            return message, []
+        text: list[str] = []
+        images: list[str] = []
+        for seg in message or []:
+            if not isinstance(seg, dict):
+                continue
+            stype = str(seg.get("type") or "")
+            data = seg.get("data") or {}
+            if stype == "text":
+                text.append(str(data.get("text") or ""))
+            elif stype == "image":
+                url = str(data.get("url") or data.get("file") or "")
+                if url:
+                    images.append(url)
+        return "".join(text), images
+
+    def remember(self, action: str, params: dict, data) -> None:
+        import time
+        mid = 0
+        if isinstance(data, dict):
+            for key in ("message_id", "msg_id", "id"):
+                try:
+                    mid = int(data.get(key) or 0)
+                except (TypeError, ValueError):
+                    mid = 0
+                if mid:
+                    break
+        if not mid:
+            return
+        text, images = self._parse_message(params.get("message"))
+        target = str(params.get("user_id") or params.get("group_id") or "")
+        self._data[str(mid)] = {"text": text, "images": images,
+                                "target": target, "ts": time.time(),
+                                "kind": action}
+        self._order.append(str(mid))
+        self.save()
+
+    # ---- 查询 ----
+
+    def get(self, message_id: int) -> dict:
+        return dict(self._data.get(str(int(message_id or 0))) or {})
+
+    def block(self, message_id: int, *, max_parts: int = 8,
+              gap: float = SENT_LOG_GAP) -> dict:
+        """把**同一次推送被切成的几段**拼起来：`{"text":…, "images":[…]}`。
+
+        判定：同目标、间隔 < `gap`、连续出现在发送顺序里。与 `message_id`
+        是否递增**无关**（服务端分配的 id 不保证递增，这一点用户实测确认过）。
+        """
+        key = str(int(message_id or 0))
+        rec = self._data.get(key)
+        if not rec:
+            return {}
+        try:
+            idx = self._order.index(key)
+        except ValueError:
+            return {"text": rec.get("text", ""),
+                    "images": list(rec.get("images") or [])}
+        lo = hi = idx
+        while lo - 1 >= 0 and idx - lo < max_parts - 1:
+            prev = self._data.get(self._order[lo - 1]) or {}
+            if not prev or prev.get("target") != rec.get("target") \
+                    or abs(float(rec.get("ts") or 0) - float(prev.get("ts") or 0)) > gap:
+                break
+            lo -= 1
+        while hi + 1 < len(self._order) and hi - idx < max_parts - 1:
+            nxt = self._data.get(self._order[hi + 1]) or {}
+            if not nxt or nxt.get("target") != rec.get("target") \
+                    or abs(float(nxt.get("ts") or 0) - float(rec.get("ts") or 0)) > gap:
+                break
+            hi += 1
+        texts: list[str] = []
+        images: list[str] = []
+        for i in range(lo, hi + 1):
+            part = self._data.get(self._order[i]) or {}
+            t = str(part.get("text") or "")
+            if t:
+                texts.append(t)
+            for url in part.get("images") or []:
+                if url not in images:
+                    images.append(url)
+        return {"text": "\n\n".join(texts), "images": images}
+
+
+class _NullSentLog:
+    """没有注入日志时的占位（测试、独立脚本）。"""
+
+    def remember(self, action, params, data) -> None:  # noqa: D401 - 空实现
+        return None
+
+
 class ApiClient:
     """NapCatQQ API 客户端。
 
@@ -20,9 +182,11 @@ class ApiClient:
     3. 提取 .data 字段作为 Python 对象返回
     """
 
-    def __init__(self, ws_handler: "WsHandler"):
+    def __init__(self, ws_handler: "WsHandler", *, sent_log=None):
         self._ws = ws_handler
         self._echo_counter = 0
+        #: 自己发出的消息日志（`SentLog`；框架启动时注入，测试里可为 None）
+        self.sent_log = sent_log or _NullSentLog()
 
     def _next_echo(self) -> str:
         self._echo_counter += 1
@@ -37,6 +201,15 @@ class ApiClient:
         result = await self._ws.request(payload)
         if not result.ok:
             raise ApiError(result.retcode, result.message or result.wording or "未知错误")
+        # **机器人自己发出去的消息**：记下 id → 内容（文本 + 图片）。
+        # 为什么必须在框架层记：`message_id` 由服务端分配，**不保证递增**，
+        # 也不能靠 id±1 找相邻段；而发送方（任何插件）这一层刚好知道完整内容。
+        # 用户引用其中一段时，`ai_chat` 靠这份日志还原整条推送（见 docs §17）。
+        if action in ("send_private_msg", "send_group_msg", "send_msg"):
+            try:
+                self.sent_log.remember(action, params or {}, result.data)
+            except Exception:  # noqa: BLE001 - 记录失败绝不能影响发送
+                pass
         return result.data
 
     # ==================== 系统接口 ====================

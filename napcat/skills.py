@@ -78,6 +78,13 @@ class Skill:
     plugin: str = ""
     #: 说明（不给就用命令自己的 description）
     description: str = ""
+    #: **怎么把命令的产物发给用户** —— 由提供方插件决定（`async (payload, ctx)`）。
+    #:
+    #: 为什么不由调用方（ai_chat）发：命令的产物可能是 `MessageChain`、`list[chain]`、
+    #: 段列表，还各有分段/图片/文件/@ 的规矩。只有插件自己知道该怎么发；转发层
+    #: 猜一次就错一次（实测：chain 列表被当段列表，整条通知一个字都没发出去）。
+    #: 不给就用调用方的默认发送（简单插件可以不管）。
+    deliver: Optional[Callable[[Any, SkillContext], Any]] = None
 
     @property
     def tool_name(self) -> str:
@@ -106,7 +113,8 @@ class SkillRegistry:
     # ---- 注册 ----
 
     def register(self, plugin: str, name: str, *, command: str = "",
-                 description: str = "", cmds=None) -> Skill:
+                 description: str = "", cmds=None,
+                 deliver: Optional[Callable] = None) -> Skill:
         """把一个**已有命令**注册成技能（同名覆盖，按插件名可整批撤销）。
 
         Args:
@@ -142,7 +150,7 @@ class SkillRegistry:
                     f"技能 {full} 映射了别的插件的命令 {cmd}"
                     f"（它属于 {owner}，应由那个插件自己注册技能）")
         skill = Skill(name=full, command=cmd, plugin=plugin,
-                      description=str(description or ""))
+                      description=str(description or ""), deliver=deliver)
         self._skills[full] = skill
         if self.logger:
             self.logger.info("[skills] %s 注册技能 %s → %s",
