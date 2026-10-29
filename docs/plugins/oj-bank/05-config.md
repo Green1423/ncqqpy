@@ -1,0 +1,139 @@
+# 五、配置
+
+> 上级：[oj_bank](README.md) · 上一章：[洛谷抓题](04-luogu.md) · 下一章：[出图](06-render.md)
+
+全部配置在 `config.json` → `plugins.oj_bank`。插件首次加载时**自动补齐**全部键
+（只补缺、不覆盖已有值、嵌套段逐键补），所以升级后新增的键会自己出现。
+
+## 5.1 全文与默认值
+
+```json
+{
+  "data_dir": "",
+  "binding": {"groups": [], "users": [], "empty_means": "deny"},
+  "max_cases": 10,
+  "list_page_size": 8,
+  "judge": {
+    "enabled": true,
+    "max_concurrent": 1,
+    "cooldown_seconds": 20,
+    "submit_window_seconds": 600,
+    "compile_timeout_ms": 20000,
+    "wall_margin_ms": 500,
+    "default_time_limit_ms": 1000,
+    "default_memory_limit_mb": 256,
+    "output_limit_kb": 1024,
+    "max_code_chars": 64000,
+    "max_file_kb": 64,
+    "cpp_compiler": "g++",
+    "c_compiler": "gcc"
+  },
+  "review": {
+    "rules": true,
+    "ai": {
+      "enabled": false,
+      "base_url": "https://myai.bupt.edu.cn/llm-gw/v1",
+      "model": "deepseek-v4-flash",
+      "api_key": "",
+      "timeout": 30,
+      "max_tokens": 1024,
+      "reasoning_effort": "none",
+      "on_error": "deny",
+      "cache_size": 256
+    }
+  },
+  "render": {
+    "width": 760,
+    "timeout": 45,
+    "max_height": 8000,
+    "keep_files": 120,
+    "chromium": "",
+    "virtual_time_budget": 4000
+  },
+  "luogu": {
+    "timeout": 20,
+    "user_agent": "",
+    "cookie": "",
+    "overwrite": false
+  }
+}
+```
+
+## 5.2 字段说明
+
+### 顶层
+
+| 键 | 说明 |
+|----|------|
+| `data_dir` | 数据目录；空 = `plugins/oj_bank/data`。sqlite、判题临时目录、出图都在它下面 |
+| `binding.groups` | 允许使用的**群号**列表（独立名单，不看框架的 `bound_groups`） |
+| `binding.users` | 允许**直接私聊**使用的 QQ 列表（小窗按来源群判） |
+| `binding.empty_means` | 两份名单都为空时的语义：`deny`（默认）/ `allow` |
+| `max_cases` | 每题最多几组卡人测试点（默认 10，与题面要求一致） |
+| `list_page_size` | `/oj list` 每页几条（1..20） |
+
+> 绑定命令与 `empty_means` 的语义跟 `ai_chat` 一致，但**群名单不回落框架的
+> `bound_groups`** —— 那是「机器人监听哪些群」，与「允许哪些群用本插件」是两件事。
+> **超级用户不豁免**（用 `/oj bind` 开通，或改这里）。运行期用
+> `/oj bind list|add|del` 管理，会写回本段。
+
+### `judge`
+
+| 键 | 说明 |
+|----|------|
+| `enabled` | 判题总开关；关掉后题库 / 出图 / 题组照常，`/oj submit` 回「没开」 |
+| `max_concurrent` | 同时判几份；QQ 机器人场景 1 就够 |
+| `cooldown_seconds` | 同一用户两次交题的间隔（0 = 不限） |
+| `submit_window_seconds` | 两步交题的等待窗口（秒） |
+| `compile_timeout_ms` | 编译超时 |
+| `wall_margin_ms` | 墙上时间在题面时限之外多给的余量 |
+| `default_time_limit_ms` / `default_memory_limit_mb` | 题目没设置时用的兜底 |
+| `output_limit_kb` | 单组输出上限；超了判 OLE |
+| `max_code_chars` | 代码长度上限（字符） |
+| `max_file_kb` | 交题文件的大小上限（KB，默认 64；最大 1024） |
+| `cpp_compiler` / `c_compiler` | 编译器路径（默认 `g++` / `gcc`） |
+
+### `review`
+
+| 键 | 说明 |
+|----|------|
+| `rules` | 静态规则开关（`system` / `fork` / `rm -rf` …） |
+| `ai.enabled` | 模型审查开关；还要配齐 `base_url` + `model` + `api_key` 才生效 |
+| `ai.base_url` | OpenAI 兼容接口根地址（会拼 `/chat/completions`） |
+| `ai.model` | 模型名 |
+| `ai.api_key` | 密钥；环境变量 `OJ_REVIEW_API_KEY` 优先 |
+| `ai.timeout` | 单次审查超时（秒） |
+| `ai.on_error` | 审查服务不可用时：`deny`（不判）/ `allow`（放行） |
+| `ai.cache_size` | 审查结果缓存条数 |
+
+### `render`
+
+| 键 | 说明 |
+|----|------|
+| `width` | 图片宽度（像素） |
+| `timeout` | 单次渲染超时（秒） |
+| `max_height` | 图片最大高度（超长题面会被截断在最大高度） |
+| `keep_files` | 出图目录最多留几张（旧的自动删） |
+| `chromium` | Chromium 路径；空 = 自动探测 |
+| `virtual_time_budget` | 等字体/公式就绪的虚拟时间预算（毫秒） |
+
+### `luogu`
+
+| 键 | 说明 |
+|----|------|
+| `timeout` | 抓取超时（秒） |
+| `user_agent` | 自定义 UA；空 = 内置的浏览器 UA |
+| `cookie` | 额外的 cookie（一般不用） |
+| `overwrite` | 题库已有同题时是否按洛谷题面覆盖 |
+
+## 5.3 改完多久生效
+
+配置在插件**启用时**读取（`on_enable` 建好判题 / 审查 / 出图服务）。改完配置后
+`/plugin` 之外的重载方式：
+
+```text
+/reload oj_bank     # 热重载本插件（或 /reload 全部）
+```
+
+白名单与 `judge.enabled` 每次命令都会读，不必重载；编译器路径、宽度这类
+在建服务时读取的，需要重载。

@@ -3076,8 +3076,20 @@ async def test_afterclass(tmp: Path):
     plugin._act_bindings[1]["client"].acts.append(act(50, "另一个绑定的新活动"))
     before = len(api.sent)
     await plugin._sync_activities()
+    # 只数**活动推送**（群消息）：失效的绑定会额外发一条私聊提醒，
+    # 把它算进来会让这条断言失去意义（它要验的是"另一个绑定照常推"）。
+    def _text_of(chain):
+        return "".join(seg.get("data", {}).get("text", "") for seg in chain.build())
+
+    # 用户绑定的推送也是 `("user", …)`，所以**按内容**区分提醒与推送
+    new = api.sent[before:]
+    dm = [m for m in new if "已失效" in _text_of(m[2])]
+    pushed = [m for m in new if m not in dm]
     check("★ 一个绑定 token 失效不影响另一个",
-          len(api.sent) == before + 1, str(len(api.sent) - before))
+          len(pushed) == 1 and "另一个绑定的新活动" in _text_of(pushed[0][2]),
+          f"pushed={len(pushed)} dm={len(dm)}")
+    check("★ 失效的那个绑定会私聊提醒设置者",
+          len(dm) == 1 and "已失效" in _text_of(dm[0][2]), str(dm)[:80])
 
     # 状态行：多绑定汇总
     line = plugin._afterclass_status_line()
@@ -3202,6 +3214,97 @@ async def test_afterclass(tmp: Path):
     check("关闭时状态行显示未开启",
           "未开启" in plugin._afterclass_status_line(),
           plugin._afterclass_status_line())
+
+    # (f1b) token **被判废**（DektAuthError）时也要通知设置者
+    #       与"快过期"分开：那个看 exp，这个看实际请求结果 —— token 可能没到期
+    #       就被服务端清掉，光看 exp 永远等不到提醒（线上只打了一行日志）。
+    from plugins.bupt_news.dekt import DektAuthError
+
+    def _chtext(ch):
+        return "".join(seg.get("data", {}).get("text", "") for seg in ch.build())
+
+    def _dms(before: int) -> list[tuple[str, str]]:
+        """`before` 之后发出的私聊提醒（按内容认，用户绑定的推送也是 user）。"""
+        return [(t, _chtext(ch)) for k, t, ch in api.sent[before:]
+                if k == "user" and "已失效" in _chtext(ch)]
+
+    class _Dead2(_FakeDekt):
+        async def me(self):
+            raise DektAuthError("401")
+
+    # 直接改 `_target()` 的返回值：这里只关心"提醒谁"，不必动真实 targets
+    _orig_target = plugin._target
+    plugin._target = lambda kind, target: {"token_by": 100000888, "event": True}
+    plugin._store.meta_set("token_warn_dates", {})
+    plugin._act_bindings = [make_binding("group", 100000777, _Dead2([]))]
+    before = len(api.sent)
+    await plugin._sync_activities()
+    msgs = _dms(before)
+    check("★ token 被判废时私聊通知设置者",
+          any(t == "100000888" for t, _ in msgs), str(msgs)[:120])
+    check("★ 提醒里给出恢复方式（dektoken 命令 + 群号）",
+          any("dektoken group 100000777" in x for _, x in msgs), str(msgs)[:160])
+    check("★ 说明换 token 即恢复、不用重启",
+          any("不用重启" in x for _, x in msgs), str(msgs)[:160])
+
+    before = len(api.sent)
+    await plugin._sync_activities()
+    check("★ 同一天不重复提醒（避免刷屏）", _dms(before) == [], str(api.sent[before:]))
+
+    # 与"过期提醒"共用当天的配额：早上已经提醒过，就不再发第二条
+    from datetime import datetime as _dt, timedelta as _td
+
+    class _DeadExpired(_Dead2):
+        def expiry(self):
+            return _dt.now() - _td(days=1)      # 已过期 → 早上那条会发
+
+    plugin._act_bindings = [make_binding("group", 100000777, _DeadExpired([]))]
+    plugin._store.meta_set("token_warn_dates", {})
+    await plugin._warn_token_expiry()          # 早上那条（已过期）
+    check("前提：过期提醒确实发出去了",
+          any("已过期" in _chtext(ch) for _k, _t, ch in api.sent[-1:]),
+          str(api.sent[-1][1]) if api.sent else "")
+    before = len(api.sent)
+    await plugin._sync_activities()            # 然后第一次撞 401
+    check("★ 同一天不重复（过期提醒 + 失效提醒共用一次配额）",
+          _dms(before) == [], str(_dms(before))[:80])
+
+    # 没记设置者 → 兜底给超管
+    plugin._store.meta_set("token_warn_dates", {})
+    plugin._target = lambda kind, target: {}      # 没记设置者
+    before = len(api.sent)
+    await plugin._sync_activities()
+    # 这一天可能先触发"已过期"那条（过期提醒先跑并占掉配额），
+    # 断言只关心"有人被通知到、且是超管兜底"
+    new_dms = [(t, _chtext(ch)) for k, t, ch in api.sent[before:] if k == "user"]
+    check("★ 没记设置者时兜底给超管",
+          any(t == "1" for t, _ in new_dms), str(new_dms)[:120])
+    plugin._target = _orig_target
+
+    # token 文件存在、但里面不是 JWT（线上曾把"文件路径"写进去）
+    class _NoToken(_FakeDekt):
+        available = False
+
+    bad = tmp / "bad-token.txt"
+    bad.write_text("/ncqqpy/plugins/bupt_news/data/dekt-tokens/user-1.txt",
+                   encoding="utf-8")
+    broken = make_binding("group", 100000777, _NoToken([]))
+    broken["token_file"] = str(bad)
+    plugin._act_bindings = [broken]
+    plugin._store.meta_set("token_warn_dates", {})
+    before = len(api.sent)
+    await plugin._sync_activities()
+    check("★ token 文件里是坏值也会提醒（不再静默）",
+          any("token 文件里不是有效的 JWT" in x for _, x in _dms(before)),
+          str(_dms(before))[:120])
+
+    # 文件**不存在**只是"还没配"，不该发提醒
+    plugin._store.meta_set("token_warn_dates", {})
+    broken["token_file"] = str(tmp / "no-such-token.txt")
+    before = len(api.sent)
+    await plugin._sync_activities()
+    check("★ 没配 token 时不发提醒（只是未配置，不是故障）",
+          _dms(before) == [], str(_dms(before))[:80])
 
     # (f2b) get 的标题行不能重复编号（线上出现过 `📢 #476 #476 标题`）
     #       编号由 `_render_notice` 统一拼，`_load_reference` 的 prefix 只带
@@ -3337,8 +3440,10 @@ async def test_afterclass(tmp: Path):
         make_binding("user", 222, _FakeDekt([])),
     ]
     for idx, (b, recs) in enumerate(zip(plugin._act_bindings, (
-            [{"id": "900", "title": "群活动", "start": "2026-10-26 15:00", "ts": 2}],
-            [{"id": "901", "title": "私聊活动", "start": "2026-10-27 09:00", "ts": 3}]))):
+            # 日期取远期常量：写具体的「今年某月」会在那天过去之后让排序口径翻转
+            # （未来升序 → 已结束降序），测试就变成了定时炸弹。
+            [{"id": "900", "title": "群活动", "start": "2099-10-26 15:00", "ts": 2}],
+            [{"id": "901", "title": "私聊活动", "start": "2099-10-27 09:00", "ts": 3}]))):
         b["store"].upsert(recs)
         b["store"].mark_pushed([r["id"] for r in recs])
     for i in (1, 2):
@@ -3394,11 +3499,11 @@ async def test_targets_commands(tmp: Path):
     from napcat.permission import PermissionManager
     from plugins.bupt_news.main import BuptNewsPlugin
 
-    def jwt(sub):
+    def jwt(sub, exp=1900000000):
         def b64(obj):
             raw = json.dumps(obj).encode()
             return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-        return f"{b64({'alg': 'HS256'})}.{b64({'sub': sub, 'exp': 1900000000})}.sig"
+        return f"{b64({'alg': 'HS256'})}.{b64({'sub': sub, 'exp': exp})}.sig"
 
     class _Api:
         def __init__(self):
@@ -3479,6 +3584,20 @@ async def test_targets_commands(tmp: Path):
     await say("/buptnews set user 100000666 event=on")
     # ⚠️ `sub` 是**学号**，与 QQ 号无关：不能拿 sub == QQ 做"是不是本人"的判定，
     # 否则所有正常 token 都会被误拒（踩过）。归属只能靠"只能写自己名下的绑定"。
+    # ★ 先校验再落盘：坏值不许写进 token 文件（线上把"自己的路径"存进去过）
+    tok_path = plugin._token_path("user", 100000666,
+                                  plugin._target("user", 100000666) or {})
+    out = await say(f"/buptnews dektoken user {tok_path}", 100000666)
+    check("★ 把文件路径当 token：明确报错",
+          "读不出" in out or "没有保存" in out, out[:80])
+    out = await say("/buptnews dektoken user 这不是一个token", 100000666)
+    check("★ 非 JWT 拒绝保存", "没有保存" in out, out[:80])
+    check("★ 拒绝之后文件没被写脏",
+          not os.path.exists(tok_path) or
+          "这不是" not in open(tok_path, encoding="utf-8").read(), "")
+    out = await say(f"/buptnews dektoken user {jwt(2026999999, exp=1700000000)}", 100000666)
+    check("★ 过期 token 拒绝保存（存了也没用）", "已经过期" in out, out[:80])
+
     out = await say(f"/buptnews dektoken user {jwt(2026999999)}", 100000666)
     check("★ 学号与 QQ 不同也能保存（不误拒）",
           "已保存" in out, out[:70])

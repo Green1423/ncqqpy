@@ -83,6 +83,7 @@ docs/
 | `ai_chat` | 多会话 AI 对话、消息包装、上下文压缩、内置工具 | [手册](plugins/ai-chat/README.md) |
 | `bupt_news` | 北邮校内通知同步、免打扰早报、短 ID 检索、DeepSeek 摘要 | [手册](plugins/bupt-news/README.md) |
 | `byrdocs` | BYR Docs 资料检索与下载（搜索编号 / 翻页 / 取文件 / 白名单） | [手册](plugins/byrdocs/README.md) |
+| `oj_bank` | 本地题库与判题：洛谷抓题 / AI 搜题入库 / 出图 / 10 组卡人测试点 / 题组 | [手册](plugins/oj-bank/README.md) |
 | `plugin_manager` | 超管私聊装卸插件（GitHub 安装、回收站、校验） | [README](../plugins/plugin_manager/README.md) |
 | `essential` | 群管理（`/ban` `/kick` `/groupinfo`）+ 问候 + 定时撤回 | 示例章节见 [插件开发](plugin-dev/README.md) |
 

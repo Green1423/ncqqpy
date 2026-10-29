@@ -14,6 +14,7 @@ import time
 import traceback
 from abc import ABC, abstractmethod
 
+from .tools import PluginTool, ToolRegistry
 from .skills import SkillContext, SkillRegistry
 from pathlib import Path
 from typing import Optional, Type
@@ -204,7 +205,7 @@ class PluginBase(ABC):
                  cmd_manager: CommandManager, perm_manager: PermissionManager,
                  file_manager: FileManager, logger, groups=None, cfg=None,
                  client=None, error_reporter=None, plugin_dir=None,
-                 skill_registry=None):
+                 skill_registry=None, tool_registry=None):
         self.api = api
         #: 插件自己的目录（包插件是 `plugins/<名字>/`，单文件插件是 `plugins/`）。
         #: `self.database()` 默认把 sqlite 文件放在它下面的 `data/` 里。
@@ -221,6 +222,14 @@ class PluginBase(ABC):
         #: 框架注入共享实例；单独 new 插件（测试/脚本）时给一个独立实例，
         #: 语义仍然是「注册给能看见它的人」。
         self.skills = skill_registry if skill_registry is not None else SkillRegistry()
+        #: 工具表（**把能力给模型用、结果回给模型**的通道，见 `napcat.tools`）。
+        #: 与 `self.skills` 的区别：技能=命令映射、结果直接发给用户；
+        #: 工具=自己写的 handler、结果进模型上下文。
+        #:
+        #: ⚠️ 属性名是 `plugin_tools` 而不是 `tools`：`ai_chat` 这类插件自己
+        #: 就有一个 `self.tools`（它自己的工具表），同名会被它覆盖掉。
+        self.plugin_tools = (tool_registry if tool_registry is not None
+                             else ToolRegistry(logger=logger))
         self.perm = perm_manager
         self.files = file_manager
         self.logger = logger
@@ -465,6 +474,36 @@ class PluginBase(ABC):
         return self.cmds.unregister(name)
 
     # ---- 技能（把能力交给 AI 用，见 napcat.skills）----
+
+    def register_tool(self, name: str, *, description: str = "",
+                      parameters: Optional[dict] = None, permission: str = "",
+                      scope: str = "all", max_chars: int = 4000,
+                      prompt_hint: str = ""):
+        """把一段能力注册成**工具**（模型调用、**结果回给模型**）。
+
+            @self.register_tool("ping", description="测服务是否在线")
+            async def ping(args: dict) -> str:
+                return "pong"        # 这句话进模型上下文，由模型组织答复
+
+        与 `register_skill` 的区别：技能是**命令映射**，执行后由命令把结果
+        发给用户，AI 不接话；工具是**自己写的 handler**，返回值给模型继续推理。
+
+        `permission` / `scope` 在消费侧判（`ai_chat` 调用前检查，与命令同一口径）。
+        """
+        def decorator(func):
+            self.plugin_tools.register(self.name, name, func,
+                                description=description, parameters=parameters,
+                                permission=permission, scope=scope,
+                                max_chars=max_chars, prompt_hint=prompt_hint)
+            return func
+        return decorator
+
+    def unregister_tool(self, name: str) -> bool:
+        return self.plugin_tools.unregister(self.tools_qualify(name))
+
+    def tools_qualify(self, name: str) -> str:
+        raw = str(name or "")
+        return raw if raw.startswith(f"{self.name}.") else f"{self.name}.{raw}"
 
     def register_skill(self, name: str, *, command: str = "",
                        description: str = "",
@@ -809,6 +848,7 @@ class PluginManager:
         #: 技能表：**跨插件**共享 —— 提供方注册，调用方（ai_chat）读取。
         #: 放这里而不是各插件自己一份：提供方不该依赖消费者。
         self.skill_registry = SkillRegistry(logger=self.logger)
+        self.tool_registry = ToolRegistry(logger=self.logger)
         self._watcher_task: Optional[asyncio.Task] = None
         self._file_mtimes: dict[str, float] = {}
         #: 被**显式禁用**过的插件名（运维/命令禁用）。与「还没启用」区分开：
@@ -1156,6 +1196,7 @@ class PluginManager:
                     api=self.api, event_bus=self.event_bus,
                     timer=self.timer, cmd_manager=self.cmd_manager,
                     skill_registry=self.skill_registry,
+                    tool_registry=self.tool_registry,
                     perm_manager=self.perm_manager,
                     file_manager=self.file_manager, logger=self.logger,
                     groups=self._groups, cfg=self._cfg, client=self._client,
@@ -1220,6 +1261,7 @@ class PluginManager:
             sys.modules.pop(key, None)
         try:
             self.skill_registry.unregister_plugin(name)
+            self.tool_registry.unregister_plugin(name)
             self.cmd_manager.unregister_plugin(name)
         except Exception:  # noqa: BLE001 - 回收失败不该掩盖加载失败的原始异常
             self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
@@ -1300,6 +1342,7 @@ class PluginManager:
                 # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
                 # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
                 self.skill_registry.unregister_plugin(name)
+                self.tool_registry.unregister_plugin(name)
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -1384,6 +1427,7 @@ class PluginManager:
                 # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
                 # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
                 self.skill_registry.unregister_plugin(name)
+                self.tool_registry.unregister_plugin(name)
             except Exception:  # noqa: BLE001
                 pass
             try:
@@ -1510,6 +1554,7 @@ class PluginManager:
                 # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
                 # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
                 self.skill_registry.unregister_plugin(name)
+                self.tool_registry.unregister_plugin(name)
             except Exception:  # noqa: BLE001
                 pass
             try:
