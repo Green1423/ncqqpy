@@ -4,7 +4,15 @@ API 调用层 - 统一封装 NapCatQQ 全部 WebSocket API
 """
 from __future__ import annotations
 
-from typing import Optional, Union, Any
+import base64
+import hashlib
+import math
+import uuid
+from pathlib import Path
+from typing import AsyncIterator, Optional, Union, Any
+
+import aiofiles
+
 from .models import (
     LoginInfo, StatusInfo, VersionInfo, SendMsgResult, FileInfo,
     User, Group, GroupMember, GroupFile, GroupFileFolder,
@@ -192,13 +200,20 @@ class ApiClient:
         self._echo_counter += 1
         return f"ncpy_{self._echo_counter}"
 
-    async def _call(self, action: str, params: dict = None) -> Any:
-        """发起 API 调用，返回 data 字段"""
+    async def _call(self, action: str, params: dict = None, *,
+                    throttle: bool = True) -> Any:
+        """发起 API 调用，返回 data 字段。
+
+        Args:
+            action: OneBot action 名。
+            params: 请求参数。
+            throttle: 是否走 `api_delay` 上报节流（分块传输时关掉）。
+        """
         echo = self._next_echo()
         payload = {"action": action, "echo": echo}
         if params:
             payload["params"] = params
-        result = await self._ws.request(payload)
+        result = await self._ws.request(payload, throttle=throttle)
         if not result.ok:
             raise ApiError(result.retcode, result.message or result.wording or "未知错误")
         # **机器人自己发出去的消息**：记下 id → 内容（文本 + 图片）。
@@ -715,53 +730,177 @@ class ApiClient:
     # 通过 `**kwargs` 透传（值为 None 的忽略）。字段名与官方一致。
 
     async def clean_stream_temp_file(self) -> Any:
-        """清理流式传输临时文件（`clean_stream_temp_file`）。
-        """
+        """清理 NapCat 侧的流式传输临时文件（上传/下载残留）。"""
         return await self._call("clean_stream_temp_file")
 
-    async def download_file_record_stream(self, **kwargs: Any) -> Any:
-        """下载语音文件流（`download_file_record_stream`）。
+    # ---- 流式文件：下载 ----
+
+    async def _stream_packets(self, action: str, params: dict,
+                              timeout: float = 60.0) -> AsyncIterator[dict]:
+        """发起流式 action，逐条产出 `data` 字典（内部方法）。
 
         Args:
-            **kwargs: 可选参数（chunk_size, file, file_id, out_format），值为 None 时忽略。
-        """
-        return await self._call("download_file_record_stream", {k: v for k, v in kwargs.items() if v is not None} or None)
+            action: 流式 action 名。
+            params: 请求参数。
+            timeout: 单条数据包的超时（秒）。
 
-    async def download_file_image_stream(self, **kwargs: Any) -> Any:
-        """下载图片文件流（`download_file_image_stream`）。
+        Yields:
+            服务端推送的数据包（`data` 字段）。
+
+        Raises:
+            ApiError: 服务端返回 failed / error 包。
+        """
+        echo = self._next_echo()
+        payload = {"action": action, "echo": echo, "params": params}
+        async for packet in self._ws.stream_request(payload, timeout=timeout):
+            status = packet.get("status")
+            data = packet.get("data") or {}
+            if status == "failed" or data.get("type") == "error":
+                raise ApiError(
+                    int(packet.get("retcode") or -1),
+                    str(packet.get("message") or packet.get("wording") or "流式传输失败"))
+            if isinstance(data, dict):
+                yield data
+
+    def _download_params(self, file, file_id, chunk_size) -> dict:
+        params: dict = {"chunk_size": int(chunk_size or 64 * 1024)}
+        if file:
+            params["file"] = file
+        if file_id:
+            params["file_id"] = file_id
+        return params
+
+    async def iter_file_stream(self, *, file: str = None, file_id: str = None,
+                               chunk_size: int = 65536,
+                               timeout: float = 60.0) -> AsyncIterator[dict]:
+        """按事件流下载文件（`file_info` / `file_chunk` / `file_complete`）。
 
         Args:
-            **kwargs: 可选参数（chunk_size, file, file_id），值为 None 时忽略。
-        """
-        return await self._call("download_file_image_stream", {k: v for k, v in kwargs.items() if v is not None} or None)
+            file: 文件路径、URL 或带 FileNapCat UUID 的引用。
+            file_id: 文件 ID（与 `file` 二选一）。
+            chunk_size: 分块大小（字节）。
+            timeout: 单条数据包超时（秒）。
 
-    async def test_download_stream(self, **kwargs: Any) -> Any:
-        """测试下载流（`test_download_stream`）。
+        Yields:
+            原始事件字典；`file_chunk` 事件的 `data` 是 Base64。
+        """
+        params = self._download_params(file, file_id, chunk_size)
+        async for event in self._stream_packets("download_file_stream",
+                                                params, timeout):
+            yield event
+
+    async def _download_bytes(self, action: str, *, file=None, file_id=None,
+                              chunk_size: int = 65536, timeout: float = 60.0,
+                              out_format: str = None) -> AsyncIterator[bytes]:
+        params = self._download_params(file, file_id, chunk_size)
+        if out_format:
+            params["out_format"] = out_format
+        async for event in self._stream_packets(action, params, timeout):
+            if event.get("data_type") == "file_chunk":
+                yield base64.b64decode(event.get("data") or "")
+
+    async def download_file_stream(self, *, file: str = None, file_id: str = None,
+                                   chunk_size: int = 65536,
+                                   timeout: float = 60.0) -> AsyncIterator[bytes]:
+        """流式下载文件，逐块产出字节。
 
         Args:
-            **kwargs: 可选参数（error），值为 None 时忽略。
+            file: 文件路径、URL 或引用 ID。
+            file_id: 文件 ID。
+            chunk_size: 分块大小（字节）。
+            timeout: 单条数据包超时（秒）。
         """
-        return await self._call("test_download_stream", {k: v for k, v in kwargs.items() if v is not None} or None)
+        async for chunk in self._download_bytes(
+                "download_file_stream", file=file, file_id=file_id,
+                chunk_size=chunk_size, timeout=timeout):
+            yield chunk
 
-    async def download_file_stream(self, **kwargs: Any) -> Any:
-        """下载文件流（`download_file_stream`）。
+    async def download_file_image_stream(self, *, file: str = None,
+                                         file_id: str = None,
+                                         chunk_size: int = 65536,
+                                         timeout: float = 60.0) -> AsyncIterator[bytes]:
+        """流式下载图片，逐块产出字节。"""
+        async for chunk in self._download_bytes(
+                "download_file_image_stream", file=file, file_id=file_id,
+                chunk_size=chunk_size, timeout=timeout):
+            yield chunk
+
+    async def download_file_record_stream(self, *, file: str = None,
+                                          file_id: str = None,
+                                          chunk_size: int = 65536,
+                                          out_format: str = "mp3",
+                                          timeout: float = 60.0) -> AsyncIterator[bytes]:
+        """流式下载语音（可按 `out_format` 转码），逐块产出字节。"""
+        async for chunk in self._download_bytes(
+                "download_file_record_stream", file=file, file_id=file_id,
+                chunk_size=chunk_size, timeout=timeout, out_format=out_format):
+            yield chunk
+
+    # ---- 流式文件：上传 ----
+
+    async def upload_file_stream(self, file_path: str, *,
+                                 name: str = None,
+                                 chunk_size: int = 512 * 1024,
+                                 retention: int = 300000,
+                                 expected_sha256: str = None,
+                                 on_progress=None) -> dict:
+        """把本地文件分块流式上传到 NapCat，返回服务器上的文件信息。
 
         Args:
-            **kwargs: 可选参数（chunk_size, file, file_id），值为 None 时忽略。
-        """
-        return await self._call("download_file_stream", {k: v for k, v in kwargs.items() if v is not None} or None)
+            file_path: 本地文件路径。
+            name: 上传后的文件名（默认取文件名）。
+            chunk_size: 每块字节数（默认 512KB）。
+            retention: 服务器保留时间（毫秒，默认 5 分钟）。
+            expected_sha256: 期望的 SHA256；提供时服务端会校验。
+            on_progress: 进度回调 `(已发送字节, 总字节)`。
 
-    async def upload_file_stream(self, file_retention: str, stream_id: str, **kwargs: Any) -> Any:
-        """上传文件流（`upload_file_stream`）。
-
-        Args:
-            file_retention: file_retention。
-            stream_id: stream_id。
-            **kwargs: 可选参数（chunk_data, chunk_index, expected_sha256, file_size, filename, is_complete …），值为 None 时忽略。
+        Returns:
+            服务端最终状态字典（含 `file_path` / `file_name` / `file_size` /
+            `sha256` 等字段，具体以 NapCat 返回为准）。
         """
-        params: dict = {"file_retention": file_retention, "stream_id": stream_id}
-        params.update({k: v for k, v in kwargs.items() if v is not None})
-        return await self._call("upload_file_stream", params)
+        path = Path(file_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        file_size = path.stat().st_size
+        file_name = name or path.name
+        chunk_size = max(1, int(chunk_size or 512 * 1024))
+        total_chunks = max(1, math.ceil(file_size / chunk_size))
+        stream_id = uuid.uuid4().hex
+        sent = 0
+        base = {
+            "stream_id": stream_id,
+            "total_chunks": total_chunks,
+            "file_size": file_size,
+            "filename": file_name,
+            "file_retention": int(retention),
+        }
+        if expected_sha256:
+            base["expected_sha256"] = expected_sha256
+
+        index = 0
+        async with aiofiles.open(path, "rb") as fh:
+            while index < total_chunks:
+                data = await fh.read(chunk_size)
+                params = dict(base)
+                params["chunk_data"] = base64.b64encode(data).decode()
+                params["chunk_index"] = index
+                result = await self._call("upload_file_stream", params,
+                                          throttle=False)
+                sent += len(data)
+                if on_progress:
+                    on_progress(sent, file_size)
+                index += 1
+                if isinstance(result, dict) and result.get("status") == "file_complete":
+                    return result
+
+        params = dict(base)
+        params["is_complete"] = True
+        return await self._call("upload_file_stream", params, throttle=False)
+
+    async def test_download_stream(self, error: bool = False) -> Any:
+        """测试下载流（排查流式通道是否可用；`error=True` 时触发测试错误）。"""
+        params = {"error": True} if error else None
+        return await self._call("test_download_stream", params)
 
     async def del_group_album_media(self, album_id: str, group_id: str, lloc: str) -> Any:
         """删除群相册媒体（`del_group_album_media`）。

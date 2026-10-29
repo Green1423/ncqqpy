@@ -19,18 +19,18 @@
 
 | 工具名（模型看到的） | 入参 | 作用 |
 |---|---|---|
-| `oj_bank_save_problem` | **必填** `title` `statement`；建议 `input_format` `output_format` `sample_input` `sample_output` `note` `source` `url` `difficulty` `tags`；可选 `testcases[]` | 任何来源的题都能入库（洛谷 / Codeforces / AtCoder / LeetCode / 教材 / AI 自拟） |
-| `oj_bank_generate_cases` | `problem_id` `count` `replace` | **让 AI 出测试点**（参考解跑出标准输出，推荐） |
-| `oj_bank_cases` | `problem_id` `cases[]` `replace` | 手写 / 覆盖卡人测试点（每题最多 10 组，可分批） |
+| `oj_bank_save_problem` | **必填** `title` `statement`；建议 `input_format` `output_format` `sample_input` `sample_output` `note` `source` `url` `difficulty` `tags` | 任何来源的题都能入库；**入库后自动生成 10 组测试点**（测试点不用自己写） |
+| `oj_bank_generate_cases` | `problem_id` `count` `replace` | **让 AI 逐组出测试点**（一组含输入+输出，推荐） |
+| `oj_bank_cases` | `problem_id` `cases[]` `replace` | 手写 / 覆盖测试点（每题最多 10 组，可分批） |
 | `oj_bank_luogu` | `pid` `overwrite` | **只在用户明确给了洛谷题号时**用；其它来源走 `save_problem` |
 | `oj_bank_get_problem` | `ident` | 取题目全文（模型回答「题库里那道题」时先取，别凭记忆） |
 | `oj_bank_list` | `keyword` `limit` | 列题库 |
 
 **存题的硬要求只有两条**：题名 + 题干。其余字段缺了照样入库 —— 工具结果会逐条点名
-「还缺：输入样例、注意事项、测试点 3/10 组」，模型照着下一句补就行。
-一次凑不齐 10 组测试点也不会让整次入库失败（先存题，再用 `oj_bank_cases` 补齐）。
+「还缺：输入样例、注意事项」。**测试点不用模型手写**：入库后插件自动让 AI 生成 10 组
+（后台跑，完成后把结果发回来源聊天）；模型只要转述「已入库，正在生成测试点」即可。
 
-每个测试点：`input` / `output` / `note`（这组卡什么）/ `weight`（默认 1）。
+每个测试点：`input` / `output` / `note`（这组用途）/ `weight`（默认 1）。
 **`output` 必须准确**：评分是逐字节比对（忽略行尾空格与末尾空行）。
 
 ### 典型流程
@@ -41,7 +41,7 @@
 工具：已入库：#7 砍树；还缺：输入样例、注意事项；测试点还差 10 组…
 模型：→ oj_bank_save_problem（补齐样例/注意事项，或先存着）
      → oj_bank_cases(problem_id=7, cases=[…])
-工具：✅ #7 砍树：写入 10 组，现在卡人测试点 10/10 组
+工具：✅ #7 砍树：写入 10 组，现在测试点 10/10 组
 模型：已经存好了，是 #7《砍树》，发 /oj show 7 可以看题、/oj submit 7 cpp 交题。
 ```
 
@@ -50,8 +50,8 @@
 ```text
 用户：这道题帮我出点测试数据
 模型：→ oj_bank_generate_cases(problem_id=7, count=10)
-工具：✅ 已生成 9 组测试点（参考解 C++17，输出由参考解跑出）；丢弃：第 6 组（TLE）
-模型：#7 现在有 9 组卡人测试点了，可以发 /oj submit 7 cpp 开始交题。
+工具：⏳ 已开始让 AI 逐组生成 10 组测试点，完成后会发到本聊天。
+模型：#7 现在有 9 组测试点了，可以发 /oj submit 7 cpp 开始交题。
 ```
 
 ## 2.2 为什么是「结果回模型」
@@ -62,7 +62,7 @@
 ```text
 用户：帮我找一道二分答案的题存进题库
 模型：（搜索……）→ 调 oj_bank_save_problem
-工具：已入库：#7 砍树（卡人测试点 10/10 组）；出图：/oj show 7
+工具：已入库：#7 砍树（测试点 10/10 组）；出图：/oj show 7
 模型：已经存进题库了，是 #7《砍树》，10 组测试点都齐了，发 /oj show 7 可以看题。
 ```
 

@@ -10,7 +10,11 @@
 ```text
 两步交题：/oj submit 1 cpp  →  下一条消息是代码（文件或文本）
         ↓
-取代码：消息里的文件段 / 群文件上传 / 引用的文件 / 文本
+取代码：消息里的文件段 / 群文件上传 / 引用的文件 / 文本。
+取文件**优先走框架的文件 API**（`FileManager.download_stream` →
+NapCat 的 `download_file_stream`，路径 / URL / FileNapCat UUID 都认）；
+平台不支持时才退回插件自己取：**http(s) 直连**、或 **`file://` / 本机路径**
+（只允许 `submit.local_roots` 下的目录，防止把任意本机文件当代码读）。
         ↓
 服务范围白名单（不在白名单：静默丢弃）
         ↓
@@ -90,7 +94,7 @@
 
 | 面 | 手段 |
 |----|------|
-| 谁能提交 | `binding` 白名单（群 / QQ，独立绑定，不回落框架 `bound_groups`）；超管不豁免，用 `/oj bind` 开通 |
+| 谁能提交 | `binding` 白名单（群 / QQ，独立绑定，不回落框架 `bound_groups`）；超管豁免，用 `/oj bind` 开通 |
 | 恶意代码 | 静态规则 + 模型审查，审不过**不落盘不运行** |
 | 死循环 | CPU `RLIMIT_CPU` + 墙上时间超时，超时**杀整个进程组**（fork 出来的孙子也带走） |
 | 内存 | `RLIMIT_AS`；Python 在题目内存之外再留 512MB 给解释器本身（不留会在 import 阶段误判 MLE，不留上限则一段大分配能把整机拖进 OOM） |

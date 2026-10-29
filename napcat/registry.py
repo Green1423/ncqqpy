@@ -38,7 +38,7 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
 
@@ -119,13 +119,19 @@ def event(event_type: type, *, hid: str = "",
     return decorator
 
 
+def _timer(kind: str, value: Any, name: str, description: str,
+           func: Callable) -> Callable:
+    """把一份定时声明挂到 handler 上（`every` / `daily` / `delay` 共用的落地点）。"""
+    return _attach(func, _TIMER_ATTR, TimerSpec(
+        kind=kind, value=value, handler=func,
+        name=name or func.__name__, description=description))
+
+
 def every(seconds: float, *, name: str = "",
           description: str = "") -> Callable[[Callable], Callable]:
     """声明周期定时任务（每 `seconds` 秒）。"""
     def decorator(func: Callable) -> Callable:
-        return _attach(func, _TIMER_ATTR, TimerSpec(
-            kind="every", value=float(seconds), handler=func,
-            name=name or func.__name__, description=description))
+        return _timer("every", float(seconds), name, description, func)
     return decorator
 
 
@@ -133,9 +139,7 @@ def daily(time_str: str, *, name: str = "",
           description: str = "") -> Callable[[Callable], Callable]:
     """声明每日定时任务（`"08:00"`，本机时区，月末/闰年由框架处理）。"""
     def decorator(func: Callable) -> Callable:
-        return _attach(func, _TIMER_ATTR, TimerSpec(
-            kind="daily", value=str(time_str), handler=func,
-            name=name or func.__name__, description=description))
+        return _timer("daily", str(time_str), name, description, func)
     return decorator
 
 
@@ -143,9 +147,7 @@ def delay(seconds: float, *, name: str = "",
           description: str = "") -> Callable[[Callable], Callable]:
     """声明一次性延时任务（`seconds` 秒后跑一次）。"""
     def decorator(func: Callable) -> Callable:
-        return _attach(func, _TIMER_ATTR, TimerSpec(
-            kind="delay", value=float(seconds), handler=func,
-            name=name or func.__name__, description=description))
+        return _timer("delay", float(seconds), name, description, func)
     return decorator
 
 

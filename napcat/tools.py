@@ -43,14 +43,10 @@ class DemoPlugin(PluginBase):
 from __future__ import annotations
 
 import inspect
-import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-#: 注册名允许的字符
-_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
-#: 暴露给模型的名字（OpenAI 函数名约束）
-_TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]")
+from .skills import NAME_RE, NamedRegistry, qualify_name, tool_name_for
 
 
 @dataclass
@@ -82,7 +78,7 @@ class PluginTool:
 
     @property
     def tool_name(self) -> str:
-        return _TOOL_NAME_RE.sub("_", self.name)
+        return tool_name_for(self.name)
 
     def describe(self) -> str:
         """给模型看的描述：**先判据，后功能**（模型靠判据选工具）。"""
@@ -93,28 +89,28 @@ class PluginTool:
         return hint or desc or f"{self.plugin} 提供的工具"
 
 
-class ToolRegistry:
+class ToolRegistry(NamedRegistry):
     """插件工具的注册表（进程内共享，由 `PluginManager` 注入）。"""
 
-    def __init__(self, logger=None) -> None:
-        self.logger = logger
-        self._tools: dict[str, PluginTool] = {}
+    LOG_TAG = "tools"
+    LABEL = "工具"
+    #: 保持注册顺序：工具列表会原样进系统提示，顺序稳定便于 diff
+    SORTED = False
 
-    # ---- 注册 ----
     def register(self, plugin: str, name: str, handler: Callable, *,
                  description: str = "", parameters: Optional[dict] = None,
                  permission: str = "", scope: str = "all",
                  max_chars: int = 4000, prompt_hint: str = "",
                  when: str = "") -> PluginTool:
         raw = str(name or "").strip()
-        if not raw or not _NAME_RE.match(raw):
+        if not raw or not NAME_RE.match(raw):
             raise ValueError(f"工具名不合法：{name!r}（字母数字、_ - .）")
-        full = raw if raw.startswith(f"{plugin}.") else f"{plugin}.{raw}"
+        full = qualify_name(plugin, raw)
         if "." in raw and not raw.startswith(f"{plugin}."):
             raise ValueError(f"工具 {full} 映射了别的插件的命名空间")
         if not callable(handler):
             raise ValueError("工具必须给 handler（与技能不同：这里自己写实现）")
-        if full in self._tools:
+        if full in self._entries:
             raise ValueError(f"工具 {full} 已存在")
         params = parameters if isinstance(parameters, dict) else {}
         if not params:
@@ -128,37 +124,10 @@ class ToolRegistry:
                           # 语义就是一个：「什么时候该用我」）
                           prompt_hint=str(prompt_hint or when or "").strip(),
                           accepts_ctx=_wants_ctx(handler))
-        self._tools[full] = tool
+        self._entries[full] = tool
         if self.logger:
             self.logger.info("[tools] %s 注册工具 %s", plugin, full)
         return tool
-
-    def unregister(self, name: str) -> bool:
-        return self._tools.pop(str(name or ""), None) is not None
-
-    def unregister_plugin(self, plugin: str) -> int:
-        gone = [n for n, t in self._tools.items() if t.plugin == plugin]
-        for n in gone:
-            self._tools.pop(n, None)
-        if gone and self.logger:
-            self.logger.info("[tools] %s 撤销了 %d 个工具", plugin, len(gone))
-        return len(gone)
-
-    # ---- 查询 ----
-    def get(self, name: str) -> Optional[PluginTool]:
-        return self._tools.get(str(name or ""))
-
-    def list(self, *, exclude: str = "") -> list[PluginTool]:
-        return [t for t in self._tools.values() if not exclude or t.plugin != exclude]
-
-    def by_tool_name(self, tool_name: str) -> Optional[PluginTool]:
-        for t in self._tools.values():
-            if t.tool_name == tool_name:
-                return t
-        return None
-
-    def __len__(self) -> int:
-        return len(self._tools)
 
 
 def _wants_ctx(handler: Callable) -> bool:

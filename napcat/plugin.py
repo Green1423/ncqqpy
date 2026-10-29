@@ -8,14 +8,12 @@ import asyncio
 import importlib
 import importlib.util
 import inspect
-import os
 import sys
-import time
 import traceback
-from abc import ABC, abstractmethod
+from abc import ABC
 
-from .tools import PluginTool, ToolRegistry
-from .skills import SkillContext, SkillRegistry
+from .tools import ToolRegistry
+from .skills import SkillRegistry, qualify_name
 from pathlib import Path
 from typing import Optional, Type
 
@@ -32,9 +30,8 @@ from .permission import PermissionManager
 from .file_manager import FileManager
 from .models import MessageEvent, NapCatEvent
 from .errors import (
-    ErrorReporter, NapCatError, PluginConfigError, PluginDependencyError,
-    PluginError, PluginLifecycleError, PluginLoadError, PluginRuntimeError,
-    short_reason,
+    ErrorReporter, PluginConfigError, PluginDependencyError, PluginError,
+    PluginLifecycleError, PluginLoadError, short_reason,
 )
 
 
@@ -85,10 +82,7 @@ class _DepsProxy:
         self._plugin = plugin
 
     def _manager(self):
-        own = getattr(self._plugin, "_manager", None)
-        if own is not None:
-            return own
-        return getattr(getattr(self._plugin, "client", None), "plugins", None)
+        return self._plugin.manager
 
     def get(self, name: str):
         manager = self._manager()
@@ -160,6 +154,40 @@ def resolve_plugin_class(module, *, name: str = "", logger=None):
             ", ".join(c.__name__ for c in candidates),
             candidates[0].__name__, candidates[0].__name__)
     return candidates[0] if candidates else None
+
+
+def plugin_module_name(name: str) -> str:
+    """插件在 `sys.modules` 里的模块名（`napcat_plugin_<名字>`）。
+
+    加载、热重载、失败的半成品清理三处都要拼这个名字 —— 只在这里定义一次，
+    免得两边写岔（`unload` 只摘父模块、热重载摘整棵子树的旧 bug 就是这么来的）。
+    """
+    return f"napcat_plugin_{name}"
+
+
+def discover_plugins(plugin_dir) -> list[str]:
+    """插件目录里所有**可加载**的插件名（不依赖当前是否加载成功）。
+
+    判定只有两条：`<名>/__init__.py`（包插件）或 `<名>.py`（单文件插件）。
+    以 `_` / `.` 开头的条目一律跳过 —— `.trash`（回收站）和 `.new-<名>`
+    （安装中的临时目录，里面有完整的 `__init__.py`）都躺在插件目录里，
+    不挡的话 watcher 会把它当成一个插件去加载。
+
+    这是「目录里有哪些插件」的**唯一实现**：框架的 watcher/加载器和
+    `plugin_manager` 都调它，两边判定不会再漂移。
+    """
+    root = Path(plugin_dir)
+    names: list[str] = []
+    if not root.exists():
+        return names
+    for path in sorted(root.iterdir()):
+        if path.name.startswith(("_", ".")):
+            continue
+        if path.is_dir() and (path / "__init__.py").is_file():
+            names.append(path.name)
+        elif path.suffix == ".py":
+            names.append(path.stem)
+    return names
 
 
 class PluginBase(ABC):
@@ -301,20 +329,11 @@ class PluginBase(ABC):
         不要求依赖先加载 —— 因此可用在 `on_load` 里。
         """
         required, optional = self.dependency_specs()
-        manager = getattr(self, "_manager", None) or getattr(
-            getattr(self, "client", None), "plugins", None)
+        manager = self.manager
         return check_dependencies(
             required, optional,
             resolve=(manager.get if manager is not None else (lambda _name: None)),
             version_of=provided_version, owner=self.name)
-
-    def _dep_names(self) -> tuple[list[str], list[str]]:
-        """内部用：声明写坏时不抛异常，退化成「没有依赖」并在日志里说清。"""
-        try:
-            return self.dependency_names()
-        except DependencyError as exc:
-            self._log("error", f"依赖声明非法：{exc}")
-            return [], []
 
     def _seed_config(self) -> ConfigFill:
         """按 `config_template()` 初始化 `config.json` 里本插件的配置段。
@@ -505,8 +524,8 @@ class PluginBase(ABC):
         return self.plugin_tools.unregister(self.tools_qualify(name))
 
     def tools_qualify(self, name: str) -> str:
-        raw = str(name or "")
-        return raw if raw.startswith(f"{self.name}.") else f"{self.name}.{raw}"
+        """把工具短名拼成 `插件名.工具名`（见 `napcat.skills.qualify_name`）。"""
+        return qualify_name(self.name, name)
 
     def register_skill(self, name: str, *, command: str = "",
                        description: str = "", prompt_hint: str = "",
@@ -676,11 +695,9 @@ class PluginBase(ABC):
             return self.timer.at(time_str, name=task_name)(func)
         return decorator
 
-    def cancel_schedule(self, name: str):
-        """取消指定名称的定时任务"""
-        self.timer.cancel(name)
-        if name in self._timers:
-            self._timers.remove(name)
+    def cancel_schedule(self, name: str) -> bool:
+        """取消指定名称的定时任务（`stop_timer` 的别名，行为与它完全一致）。"""
+        return self.stop_timer(name)
 
     @property
     def config(self):
@@ -694,6 +711,19 @@ class PluginBase(ABC):
     def plugin_dir(self):
         """插件目录（框架加载时注入；手搓实例时为 None）。"""
         return self._plugin_dir
+
+    @property
+    def manager(self):
+        """管理本插件的 `PluginManager`（框架注入；手搓宿主时为 `client.plugins`）。
+
+        「管理器在哪」只有这一份解析：先看加载时注入的 `_manager`，再退回
+        `client.plugins`。`_DepsProxy`、`dependency_check()` 和 `plugin_manager`
+        以前各写了一遍，其中一处优先级还是反的 —— 同一件事两个答案。
+        """
+        own = getattr(self, "_manager", None)
+        if own is not None:
+            return own
+        return getattr(getattr(self, "client", None), "plugins", None)
 
     def database(self, name: str = "", *, path=None, ensure=()):
         """打开（或复用）本插件的 sqlite 数据库。
@@ -774,30 +804,31 @@ class PluginBase(ABC):
         return self.event_bus.resume(hid)
 
     def stop_command(self, name: str) -> bool:
-        """移除指定命令"""
-        h = self.cmds._commands.pop(name, None)
-        return h is not None
+        """移除指定命令（含它的别名条目 —— 与 `/stop command` 同一条路径）。
+
+        ⚠️ 以前直接 `pop(self.cmds._commands)`，别名的条目留在注册表里：
+        命令没了，别名还能调到同一个 handler。
+        """
+        return self.cmds.unregister(name)
 
     def pause_command(self, name: str) -> bool:
-        """启用/禁用命令（toggle）。禁用后返回\"命令不存在\"。"""
-        h = self.cmds._commands.get(name)
-        if h:
-            h.disabled = not h.disabled
-            return True
-        return False
+        """启用/禁用命令（toggle）。禁用后调用等于「命令不存在」。"""
+        return self.cmds.set_disabled(name)
 
     def stop_timer(self, name: str) -> bool:
-        """取消指定定时任务"""
-        self.timer.cancel(name)
-        return True
+        """取消指定定时任务（返回它原本是否存在）。"""
+        found = self.timer.cancel(name)
+        if name in self._timers:
+            self._timers.remove(name)
+        return found
 
     def pause_timer(self, name: str) -> bool:
         """暂停指定定时任务"""
-        return self.timer.pause_timer(name) if hasattr(self.timer, "pause_timer") else False
+        return self.timer.pause_timer(name)
 
     def resume_timer(self, name: str) -> bool:
         """恢复指定定时任务"""
-        return self.timer.resume_timer(name) if hasattr(self.timer, "resume_timer") else False
+        return self.timer.resume_timer(name)
 
     @property
     def enabled(self) -> bool:
@@ -864,6 +895,8 @@ class PluginManager:
         self._dep_blocked: dict[str, str] = {}
         #: 依赖图缓存（每次插件集合变化时失效）：拓扑序与反向边都由它算。
         self._dep_cache: Optional[tuple[tuple, dict, dict]] = None
+        #: 插件入口类缓存：{名字: (源码最新 mtime, 类)}，见 `plugin_class()`。
+        self._class_cache: dict[str, tuple[float, object]] = {}
         #: `reload()` 级联保护的开关（避免「重载依赖 → 级联重载使用者」时递归）。
         self._reloading: set[str] = set()
         # 生命周期失败（加载/启用/重载）的受众是超管而不是群：群里只该看到
@@ -888,13 +921,54 @@ class PluginManager:
                 return plugin.dependency_names()
             except DependencyError:
                 return [], []
-        plugin_class = self._peek_plugin_class(name)
+        plugin_class = self.plugin_class(name)
         if plugin_class is None:
             return [], []
         try:
             return plugin_class.dependency_names()
         except DependencyError:
             return [], []
+
+    def _locate(self, name: str) -> Optional[Path]:
+        """插件入口文件：包目录 `<名>/__init__.py` 优先，其次单文件 `<名>.py`。
+
+        两处路径规则只在这里定义 —— `load()` 与 `_peek_plugin_class()` 都要
+        先定位入口，写岔过一次（`_peek` 只认单文件，包插件的依赖声明永远读不到）。
+        """
+        pkg_init = self.plugin_dir / name / "__init__.py"
+        if pkg_init.is_file():
+            return pkg_init
+        single = self.plugin_dir / f"{name}.py"
+        return single if single.is_file() else None
+
+    def _source_stamp(self, name: str) -> float:
+        """插件源码的最新 mtime（`plugin_class` 的缓存失效键）。"""
+        try:
+            return max((p.stat().st_mtime for p in self._plugin_files(name)),
+                       default=0.0)
+        except OSError:
+            return 0.0
+
+    def plugin_class(self, name: str):
+        """插件的入口类（已加载的取实例类，未加载的读一次磁盘，带缓存）。
+
+        读类必须导入模块（`_peek_plugin_class` 会执行它），实测 6 个真实插件
+        合计 118~151 ms —— 以前每次 `/plugin list` 都重付一遍。缓存键是
+        「源码最新 mtime」，改了文件立刻失效，热重载语义不受影响。
+
+        Returns:
+            入口类；模块读不出来（语法错、缺依赖）时返回 None。
+        """
+        loaded = self._plugins.get(name)
+        if loaded is not None:
+            return loaded.__class__
+        stamp = self._source_stamp(name)
+        cached = self._class_cache.get(name)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        plugin_class = self._peek_plugin_class(name)
+        self._class_cache[name] = (stamp, plugin_class)
+        return plugin_class
 
     def _peek_plugin_class(self, name: str):
         """不实例化地看一眼插件模块里的 PluginBase 子类（找不到返回 None）。
@@ -911,11 +985,10 @@ class PluginManager:
         先把父模块挂进 `sys.modules`，否则导入直接失败 → 拿不到声明 →
         依赖检查被静默跳过（踩过：`requires` 形同虚设）。
         """
-        pkg_init = self.plugin_dir / name / "__init__.py"
-        file_path = pkg_init if pkg_init.exists() else self.plugin_dir / f"{name}.py"
-        if not file_path.exists():
+        file_path = self._locate(name)
+        if file_path is None:
             return None
-        mod_name = f"napcat_plugin_{name}"
+        mod_name = plugin_module_name(name)
         saved = {key: sys.modules[key] for key in list(sys.modules)
                  if key == mod_name or key.startswith(mod_name + ".")}
         try:
@@ -1024,8 +1097,7 @@ class PluginManager:
         """
         from .deps import check_dependencies as _check
 
-        plugin_class = self._plugins[name].__class__ if name in self._plugins \
-            else self._peek_plugin_class(name)
+        plugin_class = self.plugin_class(name)
         if plugin_class is None:
             return None                      # 模块本身读不了 → 没有判定可言
         try:
@@ -1061,12 +1133,16 @@ class PluginManager:
         for name in self._ordered(list(self._plugins.keys())):
             await self.enable(name)
 
-    def _ordered(self, names: list[str]) -> list[str]:
-        """把一批插件名按依赖顺序排（成环等异常时退回字典序）。"""
+    def _ordered(self, names: list[str], *, unload: bool = False) -> list[str]:
+        """把一批插件名按依赖顺序排（成环等异常时退回字典序）。
+
+        `unload=True` 用卸载序（使用者在前），否则用加载序（依赖在前）。
+        两个方向原来是两个逐字重复的函数。
+        """
         if not names:
             return []
         try:
-            order = self.load_order()
+            order = self.unload_order() if unload else self.load_order()
         except DependencyError:
             return sorted(names)
         index = {name: i for i, name in enumerate(order)}
@@ -1114,7 +1190,7 @@ class PluginManager:
         """
         from .deps import check_dependencies as _check
 
-        plugin_class = self._peek_plugin_class(name)
+        plugin_class = self.plugin_class(name)
         if plugin_class is None:
             return True                      # 模块本身有问题 → 走正常失败路径
         try:
@@ -1166,17 +1242,11 @@ class PluginManager:
             self.logger.warning(f"插件 {name} 已加载")
             return self._plugins[name]
 
-        # 优先尝试包目录: name/__init__.py
-        pkg_init = self.plugin_dir / name / "__init__.py"
-        if pkg_init.exists():
-            file_path = pkg_init
-            mod_name = f"napcat_plugin_{name}"
-        else:
-            file_path = self.plugin_dir / f"{name}.py"
-            if not file_path.exists():
-                self.logger.error(f"插件不存在: {self.plugin_dir / name}")
-                return None
-            mod_name = f"napcat_plugin_{name}"
+        file_path = self._locate(name)
+        if file_path is None:
+            self.logger.error(f"插件不存在: {self.plugin_dir / name}")
+            return None
+        mod_name = plugin_module_name(name)
 
         # 依赖检查放在实例化**之前**（读类属性，见 PluginBase.dependency_specs）
         if not await self._check_requires_before_load(name):
@@ -1193,7 +1263,6 @@ class PluginManager:
             spec.loader.exec_module(module)
 
             # 查找 PluginBase 子类（优先 `__init__.py` 里的 `PLUGIN = 类`）
-            plugin_instance = None
             plugin_class = resolve_plugin_class(module, name=name, logger=self.logger)
             if plugin_class is not None:
                 instance = plugin_class(
@@ -1246,11 +1315,11 @@ class PluginManager:
             # 留着会让下一次加载（以及热重载回滚）导入到坏模块。on_load 里注册过的
             # 命令/事件/定时器也一并撤销，避免同一命令被重复注册、
             # 或者一个永远没人取消的定时任务留在后台。
-            self._discard_partial(name, mod_name, plugin_instance)
+            self._discard_partial(name, plugin_instance)
             await self._report_lifecycle(exc, name, "加载")
             return None
 
-    def _discard_partial(self, name: str, mod_name: str, instance=None) -> None:
+    def _discard_partial(self, name: str, instance=None) -> None:
         """加载失败后清理痕迹：半成品模块 + 它已注册的命令/事件/定时器。
 
         ⚠️ 三样都要清。此前只 pop 了模块并按「命令名以插件名开头」猜着注销命令，
@@ -1260,18 +1329,9 @@ class PluginManager:
         归属现在来自注册时打的标签（`CommandHandler.plugin` / 实例的 `_handlers`、
         `_timers`），不靠命名约定猜。
         """
-        for key in [k for k in sys.modules
-                    if k == mod_name or k.startswith(mod_name + ".")]:
-            sys.modules.pop(key, None)
-        try:
-            self.skill_registry.unregister_plugin(name)
-            self.tool_registry.unregister_plugin(name)
-            self.cmd_manager.unregister_plugin(name)
-        except Exception:  # noqa: BLE001 - 回收失败不该掩盖加载失败的原始异常
-            self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
+        self._purge_modules(name)
+        self._release(name, instance)
         if instance is not None:
-            instance._off_own_handlers()
-            instance._off_own_timers()
             instance._close_databases()
         self._invalidate_deps(name)
 
@@ -1301,6 +1361,34 @@ class PluginManager:
             error = cls(short_reason(exc), plugin=name, cause=exc)
         await self._errors.notify_operators(error, where=f"插件 {name} {phase}")
 
+    def _release(self, name: str, plugin: Optional["PluginBase"] = None) -> None:
+        """撤掉插件注册的命令 / 技能 / 工具 / 事件处理器 / 定时任务。
+
+        卸载、加载失败、启用失败三条路径共用这一份拆卸逻辑 —— 以前它们各写
+        一遍，顺序与容错还各不相同，漏一处就是「插件已经没了，事件却照收」。
+        顺序有意如此：先把**对外可调用的入口**（命令/技能/工具）摘掉，再撤
+        事件与定时器，中间不会留下「还能调到、但对象已经解绑」的窗口。
+
+        Args:
+            name: 插件名（注册表按这个归属回收）。
+            plugin: 插件实例；还没构造出来（`on_load` 之前就失败）时为空，
+                此时只回收注册表里按插件名记的条目。
+        """
+        for registry, label in ((self.skill_registry, "技能"),
+                                (self.tool_registry, "工具")):
+            try:
+                registry.unregister_plugin(name)
+            except Exception:  # noqa: BLE001 - 回收失败不掩盖原始失败
+                self.logger.warning("回收插件 %s 的%s失败", name, label,
+                                    exc_info=True)
+        try:
+            self.cmd_manager.unregister_plugin(name)
+        except Exception:  # noqa: BLE001
+            self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
+        if plugin is not None:
+            plugin._off_own_handlers()
+            plugin._off_own_timers()
+
     # ---- 启用/禁用 ----
 
     async def enable(self, name: str) -> bool:
@@ -1327,36 +1415,7 @@ class PluginManager:
                    if any(d in self._disabled for d in blocked) else ""))
             return False
         self._disabled.discard(name)
-        try:
-            await plugin.on_enable()
-            plugin._enabled = True
-            # 记下「本次启用注册到哪」：on_disable 只撤销这一段
-            plugin._handlers_base = len(plugin._handlers)
-            self.logger.info(f"插件 {name} 已启用")
-            return True
-        except Exception as exc:
-            self.logger.error(f"启用插件 {name} 失败:\n{traceback.format_exc()}")
-            # ⚠️ 启用失败必须**回滚这次已经注册的东西**：`on_enable` 是逐条注册的，
-            # 抛异常时前面几条已经生效。以前就这么留着（`_enabled` 仍是 False），
-            # 而 `disable()` 见到「未启用」直接提前返回、连 `on_disable` 都不会调用，
-            # 于是这些处理器永久泄漏：插件明明没启用，事件却照收（再启用一次还会叠加）。
-            plugin._off_own_handlers()
-            plugin._off_own_timers()
-            try:
-                # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
-                # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
-                self.skill_registry.unregister_plugin(name)
-                self.tool_registry.unregister_plugin(name)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                self.cmd_manager.unregister_plugin(name)
-            except Exception:  # noqa: BLE001 - 回收失败不掩盖启用失败的原始异常
-                self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
-            plugin._enabled = False
-            plugin._handlers_base = 0
-            await self._report_lifecycle(exc, name, "启用")
-            return False
+        return await self._activate(name, plugin)
 
     async def ensure_requires(self, name: str) -> tuple[bool, list[str]]:
         """确保 `name` 的必需依赖都已**加载并启用**，返回 (是否就绪, 被顺带启用的)。
@@ -1416,32 +1475,32 @@ class PluginManager:
         if name in self._disabled:
             self.logger.warning(f"插件 {name} 已被显式禁用，不自动启用它")
             return False
-        self._disabled.discard(name)
+        return await self._activate(name, plugin)
+
+    async def _activate(self, name: str, plugin: "PluginBase") -> bool:
+        """跑 `on_enable` 并置位；失败时把本次注册的东西拆干净再报超管。
+
+        `on_enable` 是**逐条注册**的：抛异常时前面几条已经生效。留着它们的后果
+        是「插件明明没启用，事件却照收」—— `disable()` 见到「未启用」直接提前
+        返回，连 `on_disable` 都不会调用，泄漏没有第二次修复机会。
+
+        `enable()` 与 `_enable_direct()` 只在「依赖闸门」上有区别，激活与回滚
+        必须走同一份实现（这两段以前各自抄了一遍）。
+        """
         try:
             await plugin.on_enable()
-            plugin._enabled = True
-            plugin._handlers_base = len(plugin._handlers)
-            self.logger.info(f"插件 {name} 已启用")
-            return True
         except Exception as exc:
             self.logger.error(f"启用插件 {name} 失败:\n{traceback.format_exc()}")
-            plugin._off_own_handlers()
-            plugin._off_own_timers()
-            try:
-                # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
-                # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
-                self.skill_registry.unregister_plugin(name)
-                self.tool_registry.unregister_plugin(name)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                self.cmd_manager.unregister_plugin(name)
-            except Exception:  # noqa: BLE001
-                self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
             plugin._enabled = False
             plugin._handlers_base = 0
+            self._release(name, plugin)
             await self._report_lifecycle(exc, name, "启用")
             return False
+        plugin._enabled = True
+        # 记下「本次启用注册到哪」：on_disable 只撤销这一段
+        plugin._handlers_base = len(plugin._handlers)
+        self.logger.info(f"插件 {name} 已启用")
+        return True
 
     async def dependents_block(self, name: str, *, action: str,
                                what: str = "") -> list[str]:
@@ -1476,7 +1535,7 @@ class PluginManager:
         if users and not force:
             return False
         if users:
-            for user in await self._ordered_for_unload(users):
+            for user in self._ordered(users, unload=True):
                 await self.disable(user, force=True)
         self._disabled.add(name)
         try:
@@ -1492,17 +1551,6 @@ class PluginManager:
 
     # ---- 卸载 ----
 
-    async def _ordered_for_unload(self, names: list[str]) -> list[str]:
-        """把一批插件按「使用者在前、被依赖的在后」排序（卸载顺序）。"""
-        if not names:
-            return []
-        try:
-            order = self.unload_order()
-        except DependencyError:
-            return sorted(names)
-        index = {name: i for i, name in enumerate(order)}
-        return sorted(names, key=lambda n: (index.get(n, len(order)), n))
-
     def _purge_modules(self, name: str) -> int:
         """把该插件的整棵模块子树从 `sys.modules` 摘掉，返回摘掉的条数。
 
@@ -1512,7 +1560,7 @@ class PluginManager:
         而热重载路径因为自己另写了一遍清理反而没事 —— 同一件事两个写法，
         迟早有一个漏。
         """
-        mod_name = f"napcat_plugin_{name}"
+        mod_name = plugin_module_name(name)
         removed = 0
         for key in [k for k in sys.modules
                     if k == mod_name or k.startswith(mod_name + ".")]:
@@ -1533,7 +1581,7 @@ class PluginManager:
         users = await self.dependents_block(name, action="卸载")
         if users and not force:
             return False
-        for user in await self._ordered_for_unload(users):
+        for user in self._ordered(users, unload=True):
             await self.unload(user, force=True)
         plugin = self._plugins.pop(name, None)
         if not plugin:
@@ -1546,25 +1594,12 @@ class PluginManager:
             if plugin._enabled:
                 await plugin.on_disable()
                 plugin._enabled = False
-            # 离场实例必须与事件总线彻底解绑：它的处理器可能是**任何**历史状态下
-            # 注册的（例如热重载回滚过几次），只依赖 on_disable 的增量撤销不够。
-            # 不解绑的后果很直观：`/events` 里同一个插件出现两对监听器，
-            # 每条群消息被处理两次。
-            plugin._off_own_handlers()
-            # 定时任务与命令同理：实例都要走了，它的任务不该继续跑、它的命令
-            # 也不该继续能被调用（旧命令绑的是这个死实例，调用等于执行旧代码）。
-            plugin._off_own_timers()
-            try:
-                # 技能跟命令一样绑在这个实例上：实例要被丢弃了，它注册的技能
-                # 也得撤掉 —— 否则模型会调用到一个已经死掉的 handler
-                self.skill_registry.unregister_plugin(name)
-                self.tool_registry.unregister_plugin(name)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                self.cmd_manager.unregister_plugin(name)
-            except Exception:  # noqa: BLE001
-                self.logger.warning("回收插件 %s 的命令失败", name, exc_info=True)
+            # 离场实例必须与事件总线、定时器、命令/技能/工具注册表彻底解绑：
+            # 它的处理器可能是**任何**历史状态下注册的（例如热重载回滚过几次），
+            # 只依赖 on_disable 的增量撤销不够。不解绑的后果很直观：`/events` 里
+            # 同一个插件出现两对监听器，每条群消息被处理两次；旧命令还绑着这个
+            # 死实例，调用等于执行旧代码。
+            self._release(name, plugin)
             await plugin.on_unload()
             plugin._close_databases()
             # 移除整棵模块子树
@@ -1608,9 +1643,7 @@ class PluginManager:
         if was_enabled:
             await self.disable(name, force=True)
         await self.unload(name, force=True)
-        # 清理整棵模块子树：包目录插件的子模块（.main/.portal/...）此前残留
-        # 在 sys.modules 中，导致热重载后仍执行旧代码。
-        self._purge_modules(name)
+        # 模块子树已由 `unload()` 里的 `_purge_modules()` 摘干净，这里不再重复摘。
         # 清掉字节码缓存：.pyc 的校验只比对「源文件 mtime 的**整秒** + 文件大小」，
         # 同一秒内改写且大小相同（改个常量、换个字符串）时会被判为有效，
         # 于是重新导入拿到的还是**旧字节码** —— 表现为「改了代码但热重载没生效」。
@@ -1724,17 +1757,7 @@ class PluginManager:
 
     def _plugin_names(self) -> list[str]:
         """插件目录里所有**可加载**的插件名（不依赖当前是否加载成功）。"""
-        names = []
-        if not self.plugin_dir.exists():
-            return names
-        for path in sorted(self.plugin_dir.iterdir()):
-            if path.name.startswith("_"):
-                continue
-            if path.is_dir() and (path / "__init__.py").exists():
-                names.append(path.name)
-            elif path.suffix == ".py":
-                names.append(path.stem)
-        return names
+        return discover_plugins(self.plugin_dir)
 
     async def _watch_loop(self, interval: float):
         while True:

@@ -40,6 +40,8 @@ from typing import Any, Optional
 
 from napcat.errors import PluginError
 
+from .github import guess_repo
+
 #: 合法插件名：目录名安全（不含 `/`、`..`、空格）
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: 合法 repo：`owner/name`，两段都只允许 GitHub 允许的字符
@@ -94,7 +96,6 @@ class PluginEntry:
         if not repo_raw:
             raise ManifestError(f"{where}（{name}）缺少 repo")
         # 允许写完整链接 / scp 风格，统一抠成 owner/repo
-        from .github import guess_repo            # 局部导入：避免包内循环依赖
         repo = guess_repo(repo_raw)
         if not REPO_RE.match(repo):
             raise ManifestError(
@@ -123,12 +124,21 @@ class Manifest:
     updated: str = ""
     source: str = ""
     raw_version: int = 1
+    #: `name → entry` 索引（`get()`/`in` 是 O(1) 而不是每次线性扫）
+    _index: dict[str, PluginEntry] = field(default_factory=dict, repr=False,
+                                           compare=False)
+
+    def __post_init__(self) -> None:
+        self._index = {entry.name: entry for entry in self.entries}
 
     def get(self, name: str) -> Optional[PluginEntry]:
-        for entry in self.entries:
-            if entry.name == name:
-                return entry
-        return None
+        return self._index.get(str(name or ""))
+
+    def __contains__(self, name: str) -> bool:
+        return str(name or "") in self._index
+
+    def __len__(self) -> int:
+        return len(self.entries)
 
     def names(self) -> list[str]:
         return [e.name for e in self.entries]

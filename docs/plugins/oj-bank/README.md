@@ -4,7 +4,7 @@
 > 配置段：`config.json` → `plugins.oj_bank`
 > 自检：`venv-arm/bin/python -B tests/test_oj_bank.py`
 
-把题目存进本地题库，渲染成图片，用 **10 组卡人测试点**判题评分，并把题目编成
+把题目存进本地题库，渲染成图片，用 **10 组测试点**判题评分，并把题目编成
 **题组**出榜单。题目有两个来源：洛谷题号（`/oj luogu P1001`）和 AI 搜来的题
 （工具 `oj_bank_save_problem`）。
 
@@ -25,7 +25,7 @@
 | [洛谷抓题](04-luogu.md) | 抓什么、为什么必需 cookie、样例与测试点的差别 |
 | [配置](05-config.md) | 全部字段与默认值 |
 | [出图](06-render.md) | 渲染链路、KaTeX、失败时的表现 |
-| [测试点从哪来（AI 生成）](08-testcases.md) | 生成流程、参考解校验、失败排查 |
+| [测试点从哪来（AI 生成）](08-testcases.md) | 逐组生成、去重与超时、失败排查 |
 | [代码结构与测试](07-structure.md) | 模块职责、测试覆盖、排查 |
 
 ## 快速开始
@@ -41,13 +41,13 @@
 ```
 
 服务范围是**插件自己的一份名单**（不跟框架的 `bound_groups` 走）：名单为空时
-按 `empty_means` 办（默认谁都不用）。用私聊里的 `/oj bind add ...` 开通（仅超管），
+空 = 谁都不用。用私聊里的 `/oj bind add ...` 开通（仅超管），
 或直接改配置：
 
 ```json
 "plugins": {
   "oj_bank": {
-    "binding": {"groups": [], "users": [], "empty_means": "deny"}
+    "binding": {"groups": [], "users": []}
   }
 }
 ```

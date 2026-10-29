@@ -35,21 +35,22 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 from pathlib import Path
 
-from napcat.plugin import PluginBase
-from napcat.errors import PluginConfigError, PluginRuntimeError
+from napcat.plugin import PluginBase, discover_plugins
+from napcat.errors import PluginConfigError
 from napcat.command import (
-    ChoiceField, CommandSchema, StrField, VariadicField, CommandPacket,
+    BoolField, ChoiceField, CommandSchema, IntField, StrField, VariadicField,
+    CommandPacket,
 )
 import napcat.deps as plugindeps
 
 from . import registry
-from .github import GithubClient, GithubError, env_token
+from .github import GithubClient, GithubError, env_token, guess_repo
 from .installer import (
-    InstallError, InstalledPlugin, InstalledStore, Installer, INSTALLED_FILE,
-    SelfOperationError, collect_files, count_plugin_files,
+    INSTALLED_FILE, STAGING_DIR, InstallError, InstalledPlugin, InstalledStore,
+    Installer, SelfOperationError, clear_staging, collect_files,
+    count_plugin_files, write_json_atomic,
 )
 from .registry import DEFAULT_MANIFEST_URL, ManifestError, PluginEntry, valid_name
 
@@ -113,24 +114,20 @@ class InfoSchema(CommandSchema):
     name = StrField(required=True, description="插件名")
 
 
-class NameSchema(CommandSchema):
-    name = StrField(required=True, description="插件名")
-
-
 class InstallSchema(CommandSchema):
     name = StrField(required=True, description="插件名（见 /plugin list）")
     ref = StrField(default="", description="分支/tag/commit，缺省用列表文件里的")
-    force = StrField(default="", description="本地有同名目录时强制接管（填 true）")
+    force = BoolField(default=False, description="本地有同名目录时强制接管")
 
 
 class UpdateSchema(CommandSchema):
     names = VariadicField(description="插件名，可多个；all = 全部已安装")
-    force = StrField(default="", description="丢弃本地修改（填 true）")
+    force = BoolField(default=False, description="丢弃本地修改")
 
 
 class UninstallSchema(CommandSchema):
     name = StrField(required=True, description="插件名")
-    purge = StrField(default="", description="连 data/ 一起清掉（填 true）")
+    purge = BoolField(default=False, description="连 data/ 一起清掉")
 
 
 class AddSchema(CommandSchema):
@@ -138,17 +135,12 @@ class AddSchema(CommandSchema):
     name = StrField(default="", description="本地插件名（缺省取仓库名）")
     ref = StrField(default="", description="分支/tag/commit")
     subdir = StrField(default="", description="仓库里的子目录（monorepo 用）")
-    force = StrField(default="", description="忽略冲突与改名（填 true）")
+    force = BoolField(default=False, description="忽略冲突与改名")
 
 
 class TrashSchema(CommandSchema):
-    purge = StrField(default="", description="清空回收站（填 true）")
-    keep = StrField(default="0", description="清空时保留最近 N 份")
-
-
-def _truthy(value: str) -> bool:
-    """命令里的「开关」参数：true/1/yes/on/是 都算开。"""
-    return str(value or "").strip().lower() in ("true", "1", "yes", "on", "y", "是", "开")
+    purge = BoolField(default=False, description="清空回收站")
+    keep = IntField(default=0, min=0, description="清空时保留最近 N 份")
 
 
 # ==================== 插件 ====================
@@ -187,11 +179,10 @@ class PluginManagerPlugin(PluginBase):
     async def on_load(self):
         """准备记账（**不**在这里联网：加载要快、要能在离线时成功）。
 
-        数据目录是**懒创建**的（`_mdir()`），因为它由 `plugin_dir` 推导 ——
-        而 `plugin_dir` 可能来自配置或框架注入（见该 property）。
+        数据目录是**懒创建**的（`_mdir()`），因为它由 `plugins_root` 推导 ——
+        而它可能来自配置或框架注入（见该 property）。
         """
         self._client_obj: GithubClient | None = None
-        self._manifest_cache = None          # (拉到的时间戳, Manifest)
         self._busy = False                   # 同一时间只跑一个装卸任务
         self._pending: set[asyncio.Task] = set()
         mdir = self._mdir()
@@ -225,8 +216,8 @@ class PluginManagerPlugin(PluginBase):
     # ---- 基础件 ----
 
     @property
-    def plugin_dir(self) -> Path:
-        """`plugins/` 目录 —— 装卸动作实际落在哪里。
+    def plugins_root(self) -> Path:
+        """`plugins/` 根目录 —— 装卸动作实际落在哪里。
 
         解析顺序（**不要**只看 `__file__`）：
 
@@ -237,28 +228,30 @@ class PluginManagerPlugin(PluginBase):
 
         ⚠️ 只认 `__file__` 会在「框架的插件目录被重定向」时把插件装进**源码树**
         里（测试里踩过：临时目录的操作用了真实目录，把线上插件换了）。
+
+        命名：**不要**叫 `plugin_dir` —— 基类的 `plugin_dir` 是「我自己的目录」
+        （`plugins/<名>/`），同名但语义相反会让基类方法拿到错的路径。
         """
         configured = str(self.config.get("plugin_dir") or "").strip()
         if configured:
             return Path(configured).expanduser()
-        manager = getattr(self.client, "plugins", None) if self.client else None
+        manager = self.manager
         from_manager = getattr(manager, "plugin_dir", None)
         if from_manager:
             return Path(from_manager)
         return Path(__file__).resolve().parent.parent
 
     def _plugin_path(self, name: str) -> Path:
-        return self.plugin_dir / name
+        return self.plugins_root / name
 
     def _mdir(self) -> Path:
         """本插件的运行时数据目录（`plugins/plugin_manager/data/`）。
 
-        ⚠️ 从 `plugin_dir` 推导，**不要**用 `__file__` 旁边：`plugin_dir` 可能
-        来自配置或框架注入（测试、非默认 plugin_dir），只认 `__file__` 会把
-        记账与缓存写进源码树。放在插件目录下还有个好处：更新插件时 `data/`
-        跟着走（换代码不丢记账）。
+        ⚠️ 从 `plugins_root` 推导，**不要**用 `__file__` 旁边：它可能来自配置或
+        框架注入（测试、非默认目录），只认 `__file__` 会把记账与缓存写进源码树。
+        放在插件目录下还有个好处：更新插件时 `data/` 跟着走（换代码不丢记账）。
         """
-        return self.plugin_dir / self.name / "data"
+        return self.plugins_root / self.name / "data"
 
     @property
     def manifest_url(self) -> str:
@@ -289,7 +282,7 @@ class PluginManagerPlugin(PluginBase):
         return self._client_obj
 
     def _installer(self) -> Installer:
-        return Installer(plugin_dir=self.plugin_dir, work_dir=self._mdir(),
+        return Installer(plugin_dir=self.plugins_root, work_dir=self._mdir(),
                          client=None, store=self._store, self_name=self.name,
                          logger=self.logger)
 
@@ -304,39 +297,33 @@ class PluginManagerPlugin(PluginBase):
         return self._mdir() / "manifest.json"
 
     async def load_manifest(self, *, refresh: bool = False):
-        """取插件列表文件：内存缓存 → 磁盘缓存/网络 → 磁盘兜底。
+        """取插件列表文件：客户端缓存（TTL + ETag）→ 网络 → 磁盘兜底。
 
-        **离线也要能用**：拉不到就用上一次成功拉到的磁盘副本，并在返回值里
-        标出来（`self._manifest_stale = True`）—— 「列表文件拿不到」不该让
-        `/plugin list`、卸载、回收站这些完全本地的功能一起失效。
+        **离线也要能用**：拉不到就用上一次成功拉到的磁盘副本，并把
+        `self._manifest_stale` 立起来（`/plugin list` 会标「离线」）——
+        「列表文件拿不到」不该让卸载、回收站这些完全本地的功能一起失效。
+
+        缓存的**唯一 owner 是 `GithubClient`**：TTL 决定「要不要直接返回」，
+        ETag 决定「能不能只拿 304」。这里以前还有一层自己的内存缓存（另一套
+        时钟 + 一个 5 秒去重窗口），而且每次进网络分支前先 `client.clear_cache()`
+        —— 顺带把 ETag 也清掉，条件请求永远命中不了。两层缓存互相拆台，
+        只留客户端那层才对。
         """
-        ttl = float(self.config.get("manifest_cache_seconds") or 0)
-        if not refresh and self._manifest_cache is not None:
-            fetched_at, manifest = self._manifest_cache
-            if ttl > 0 and (asyncio.get_running_loop().time() - fetched_at) < ttl:
-                self._manifest_stale = False
-                return manifest
-            if ttl <= 0 and (asyncio.get_running_loop().time() - fetched_at) < 5:
-                self._manifest_stale = False
-                return manifest          # 缓存关掉时的极短去重，防连点
-
+        ttl = max(0.0, float(self.config.get("manifest_cache_seconds") or 0))
         client = await self._client()
-        client.clear_cache()          # 刷新就要拿新的，连客户端那层缓存一起丢
+        if refresh:
+            client.clear_cache()          # 强制刷新：连客户端那层一起丢
         self._manifest_stale = False
-        self._manifest_note = ""
         try:
-            raw = await client.fetch_manifest(self.manifest_url,
-                                              cache_ttl=max(0.0, ttl))
+            raw = await client.fetch_manifest(self.manifest_url, cache_ttl=ttl)
             manifest = registry.Manifest.parse(raw, source=self.manifest_url)
         except (GithubError, ManifestError) as exc:
             fallback = self._read_cached_manifest()
             if fallback is None:
                 raise
             self._manifest_stale = True
-            self._manifest_note = str(exc)
             self.logger.warning("[plugin_manager] 列表文件拉取失败，改用本地缓存：%s", exc)
             return fallback
-        self._manifest_cache = (asyncio.get_running_loop().time(), manifest)
         try:
             self._write_cached_manifest(raw)
         except OSError as exc:
@@ -354,10 +341,7 @@ class PluginManagerPlugin(PluginBase):
             return None
 
     def _write_cached_manifest(self, raw) -> None:
-        tmp = self.cached_manifest_path().with_name("manifest.json.tmp")
-        tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        tmp.replace(self.cached_manifest_path())
+        write_json_atomic(self.cached_manifest_path(), raw)
 
     async def _entry_for(self, name: str, *, manifest=None) -> PluginEntry:
         """找一个插件的来源：列表文件优先，其次是本地记账里的仓库。
@@ -380,8 +364,20 @@ class PluginManagerPlugin(PluginBase):
 
     # ---- 状态计算 ----
 
-    async def describe_local(self, name: str) -> dict:
-        """本地视角的插件状态（不联网）；`installed=False` 表示没装。"""
+    async def describe_local(self, name: str, *, with_files: bool = False) -> dict:
+        """本地视角的插件状态（不联网）；`installed=False` 表示没装。
+
+        `with_files=True` 才扫目录、算「哪些文件被本地改过」（`/plugin info`
+        要展示它）。`/plugin check` 只看「有没有上游更新」，用不到哈希 ——
+        以前它跟着一起算，等于每次检查都把所有插件的文件全哈希一遍。
+
+        Args:
+            name: 插件名。
+            with_files: 是否统计文件数与本地改动（有 IO 成本）。
+
+        Returns:
+            含 `installed` / `record` / `files` / `files_changed` 的字典。
+        """
         path = self._plugin_path(name)
         record = self._store.get(name)
         if not path.is_dir():
@@ -393,12 +389,14 @@ class PluginManagerPlugin(PluginBase):
             if raw:
                 local_meta = InstalledPlugin.from_dict(raw)
         effective = record or local_meta
-        local_files = collect_files(path)
+        local_files: dict[str, str] = {}
         files_changed: list[str] = []
-        if effective is not None and effective.files:
-            for rel, digest in effective.files.items():
-                if rel in local_files and local_files[rel] != digest:
-                    files_changed.append(rel)
+        if with_files:
+            local_files = collect_files(path)
+            if effective is not None and effective.files:
+                for rel, digest in effective.files.items():
+                    if rel in local_files and local_files[rel] != digest:
+                        files_changed.append(rel)
         return {
             "name": name,
             "installed": True,
@@ -508,7 +506,7 @@ class PluginManagerPlugin(PluginBase):
         那个字典是判定缓存，`load()` 成功时会清（装 store 本身就会把它清空），
         依赖装好之后再读它就是空的 —— 现象是「功能永远不生效」。
         """
-        manager = self._framework()
+        manager = self.manager
         if manager is None:
             return []
         skip = set(exclude or [])
@@ -539,7 +537,7 @@ class PluginManagerPlugin(PluginBase):
         if not names:
             return
         await asyncio.sleep(0.5)          # 先把回执发完，再动插件
-        manager = self._framework()
+        manager = self.manager
         if manager is None:
             self.logger.warning("[plugin_manager] 拿不到框架插件管理器，"
                                 "请手动 /reload 或重启")
@@ -558,7 +556,17 @@ class PluginManagerPlugin(PluginBase):
                 self.logger.error("[plugin_manager] 重载 %s 失败", name,
                                   exc_info=True)
 
-    def _spawn(self, coro, user_id: int) -> None:
+    def _launch(self, coro, receipt: str) -> str:
+        """后台跑一个装卸任务：置忙 + 落任务 + 回一句「已开始」。
+
+        三条写命令（install / update / add）共用 —— 它们原来的收尾样板
+        （`_busy = True` → `_spawn` → 返回 ⏳ 文案）逐字重复了三遍。
+        """
+        self._busy = True
+        self._spawn(coro)
+        return receipt
+
+    def _spawn(self, coro) -> None:
         """把长任务丢到后台（命令本身立刻回执，避免装到一半才回话）。"""
         task = asyncio.create_task(coro)
         self._pending.add(task)
@@ -574,26 +582,17 @@ class PluginManagerPlugin(PluginBase):
 
     # ---- 依赖报告 ----
 
-    def _framework(self):
-        """框架的 `PluginManager` —— 装卸动作要用它 load/enable/reload。
-
-        优先 `self.client.plugins`（线上是 NapCatClient），其次框架注入的
-        `self._manager`：脚本/测试里宿主对象可能是个空壳，那时后者才靠谱。
-        """
-        return (getattr(self.client, "plugins", None) if self.client else None) \
-            or getattr(self, "_manager", None)
-
     def dependency_report(self, name: str) -> dict:
         """这个插件声明了哪些依赖、现在满足没有（不联网、不实例化插件）。
 
-        未加载的插件读**类属性**（`PluginManager._peek_plugin_class`），所以
-        刚装完就能报告；模块导入失败时返回空报告 —— 那种问题由框架的加载
-        错误路径报，不该在这里再喊一遍。
+        未加载的插件读**类属性**（框架的 `PluginManager.plugin_class()`，带
+        mtime 缓存），所以刚装完就能报告；模块导入失败时返回空报告 —— 那种
+        问题由框架的加载错误路径报，不该在这里再喊一遍。
         """
-        manager = self._framework()
+        manager = self.manager
         if manager is None:
             return {"required": [], "optional": [], "missing": [], "optional_missing": []}
-        plugin_class = manager._peek_plugin_class(name)
+        plugin_class = manager.plugin_class(name)
         if plugin_class is None:
             return {"required": [], "optional": [], "missing": [], "optional_missing": []}
         try:
@@ -657,8 +656,8 @@ class PluginManagerPlugin(PluginBase):
             installed_names = {n for n in plugin._store.all()
                                if plugin._plugin_path(n).is_dir()}
             # 本地装了但列表文件里没有的，也要出现在列表里（否则「装了什么」看不见）
-            extra_local = sorted(n for n in plugin._local_plugin_names()
-                                 if n not in manifest.names() and n != plugin.name)
+            extra_local = sorted(n for n in discover_plugins(plugin.plugins_root)
+                                 if n not in manifest and n != plugin.name)
 
             lines: list[str] = []
             stale = "（离线：用的是本地缓存的列表文件）" if getattr(
@@ -696,7 +695,7 @@ class PluginManagerPlugin(PluginBase):
             name = params.name.strip()
             if not valid_name(name):
                 raise PluginConfigError(f"插件名非法：{name!r}")
-            local = await plugin.describe_local(name)
+            local = await plugin.describe_local(name, with_files=True)
             entry = None
             try:
                 manifest = await plugin.load_manifest()
@@ -803,26 +802,15 @@ class PluginManagerPlugin(PluginBase):
                     f"列表文件里没有 {name}。想装列表外的仓库用 /plugin add <仓库>")
             if params.ref.strip():
                 entry = PluginEntry(**{**entry.__dict__, "ref": params.ref.strip()})
-            if plugin._plugin_path(name).is_dir() and not _truthy(params.force):
-                record = plugin._store.get(name)
-                if record is not None:
-                    raise PluginConfigError(
-                        f"{name} 已经装过了 —— 更新用 /plugin update {name}")
-                raise PluginConfigError(
-                    f"plugins/{name} 已经存在但不是本管理器装的 ——"
-                    f"确认覆盖用 /plugin install {name} force=true（会先进回收站）")
-            plugin._busy = True
-            user_id = event.user_id
-            plugin._spawn(plugin._run_install(user_id, entry, force=_truthy(params.force)),
-                          user_id)
-            return (f"⏳ 开始安装 {name}（{entry.repo}@{entry.ref_display}）…\n"
-                    "下载完成后会私聊回执。")
+            return plugin._launch(
+                plugin._run_install(event.user_id, entry, force=params.force),
+                f"⏳ 开始安装 {name}（{entry.repo}@{entry.ref_display}）…\n"
+                "下载完成后会私聊回执。")
 
         @self.register_command(f"{ROOT}.update", schema=UpdateSchema, **op,
                                description="更新已装插件（all = 全部）")
         async def cmd_update(params, event):
             targets = [n.strip() for n in (params.names or []) if n.strip()]
-            force = _truthy(params.force)
             if not targets:
                 raise PluginConfigError(
                     "要更新哪个？/plugin update <插件名> 或 /plugin update all")
@@ -837,11 +825,10 @@ class PluginManagerPlugin(PluginBase):
                 if not valid_name(name):
                     raise PluginConfigError(f"插件名非法：{name!r}")
                 entries.append(await plugin._entry_for(name, manifest=manifest))
-            plugin._busy = True
-            user_id = event.user_id
-            plugin._spawn(plugin._run_update(user_id, entries, force=force), user_id)
-            names = "、".join(e.name for e in entries)
-            return f"⏳ 开始更新 {names}…\n完成后会私聊回执。"
+            return plugin._launch(
+                plugin._run_update(event.user_id, entries, force=params.force),
+                f"⏳ 开始更新 {'、'.join(e.name for e in entries)}…\n"
+                "完成后会私聊回执。")
 
         @self.register_command(f"{ROOT}.uninstall", schema=UninstallSchema, **op,
                                description="卸载插件（进回收站，可找回）")
@@ -853,14 +840,14 @@ class PluginManagerPlugin(PluginBase):
                 raise SelfOperationError()
             plugin._busy_guard()
             installer = await plugin._installer_ready()
-            manager = plugin._framework()
+            manager = plugin.manager
             if manager is not None and manager.get(name) is not None:
                 await manager.disable(name)
                 await manager.unload(name)
                 disabled = True
             else:
                 disabled = False
-            keep_data = not _truthy(params.purge)
+            keep_data = not params.purge
             report = installer.uninstall(name, keep_data=keep_data)
             plugin.logger.info("[plugin_manager] 卸载 %s（备份：%s）", name,
                                report["backup"])
@@ -883,7 +870,6 @@ class PluginManagerPlugin(PluginBase):
         @self.register_command(f"{ROOT}.add", schema=AddSchema, **op,
                                description="安装列表文件里没有的 GitHub 仓库")
         async def cmd_add(params, event):
-            from .github import guess_repo
             repo = guess_repo(params.repo.strip())
             if not repo:
                 raise PluginConfigError(
@@ -897,14 +883,12 @@ class PluginManagerPlugin(PluginBase):
             plugin._busy_guard()
             entry = PluginEntry(name=name, repo=repo, ref=params.ref.strip(),
                                 description=f"手工添加：{repo}")
-            plugin._busy = True
-            user_id = event.user_id
-            plugin._spawn(plugin._run_install(
-                user_id, entry, force=_truthy(params.force),
-                subdir=params.subdir.strip()), user_id)
-            return (f"⏳ 开始安装 {name} ← github.com/{repo}"
-                    f"{'/' + params.subdir.strip() if params.subdir.strip() else ''}…\n"
-                    "完成后会私聊回执。")
+            subdir = params.subdir.strip()
+            return plugin._launch(
+                plugin._run_install(event.user_id, entry, force=params.force,
+                                    subdir=subdir),
+                f"⏳ 开始安装 {name} ← github.com/{repo}"
+                f"{'/' + subdir if subdir else ''}…\n完成后会私聊回执。")
 
         @self.register_command(f"{ROOT}.refresh", schema=None, **op,
                                description="重新拉取插件列表文件")
@@ -928,11 +912,8 @@ class PluginManagerPlugin(PluginBase):
                                description="查看 / 清理回收站")
         async def cmd_trash(params, event):
             installer = await plugin._installer_ready()
-            if _truthy(params.purge):
-                try:
-                    keep = max(0, int(params.keep or 0))
-                except ValueError:
-                    raise PluginConfigError("keep 要是整数")
+            if params.purge:
+                keep = params.keep
                 removed, freed = installer.purge_trash(keep=keep)
                 return (f"🧹 回收站已清理：删除 {removed} 份备份，"
                         f"释放 {human_size(freed)}"
@@ -952,20 +933,6 @@ class PluginManagerPlugin(PluginBase):
             return chunk_messages(lines)
 
     # ---- 命令内部用的小工具 ----
-
-    def _local_plugin_names(self) -> list[str]:
-        """plugins/ 下所有可加载的插件名（与框架的判定一致）。"""
-        names = []
-        if not self.plugin_dir.is_dir():
-            return names
-        for path in sorted(self.plugin_dir.iterdir()):
-            if path.name.startswith("_") or path.name.startswith("."):
-                continue
-            if path.is_dir() and (path / "__init__.py").exists():
-                names.append(path.name)
-            elif path.suffix == ".py":
-                names.append(path.stem)
-        return names
 
     def _busy_guard(self) -> None:
         if self._busy:
@@ -1068,7 +1035,7 @@ class PluginManagerPlugin(PluginBase):
                               exc_info=True)
             lines.append(f"❌ 未预期的失败：{type(exc).__name__}: {exc}")
         finally:
-            self._cleanup_staging_quietly()
+            clear_staging(self._mdir() / STAGING_DIR)
             await self._finish_operation(user_id, title, lines, results)
 
     async def _run_update(self, user_id: int, entries: list[PluginEntry], *,
@@ -1109,22 +1076,8 @@ class PluginManagerPlugin(PluginBase):
                 lines.append("")
                 lines.append("受影响插件会热重载：" + "、".join(changed))
         finally:
-            self._cleanup_staging_quietly()
+            clear_staging(self._mdir() / STAGING_DIR)
             await self._finish_operation(user_id, title, lines, results)
-
-    def _cleanup_staging_quietly(self) -> None:
-        """清掉暂存区（失败的下载/解压不该在磁盘上攒垃圾）。"""
-        staging = self._mdir() / ".staging"
-        if not staging.is_dir():
-            return
-        for path in staging.iterdir():
-            try:
-                if path.is_dir():
-                    shutil.rmtree(path, ignore_errors=True)
-                else:
-                    path.unlink()
-            except OSError:
-                pass
 
     @staticmethod
     def _reload_hint(name: str) -> str:

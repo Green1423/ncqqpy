@@ -32,7 +32,7 @@ from napcat.file_manager import FileManager
 from napcat.message import MessageChain
 from napcat.models import MessageEvent
 from napcat.permission import PermissionManager
-from napcat.plugin import PluginBase, PluginManager
+from napcat.plugin import PluginBase, PluginManager, discover_plugins
 from napcat.errors import (
     PluginTimeoutError, PluginConfigError, PluginLoadError, PluginRuntimeError,
     ErrorReporter,
@@ -453,6 +453,74 @@ async def test_plugin_manager_defects():
     await mgr4.unload("timedplug")
     check("unload 回收定时任务", "timedplug_tick" not in timer4._metas, str(timer4._metas))
     timer4.stop()
+
+    # (g) 去重后的单一 owner：这几条以前各有两份实现，行为已经分叉
+    pdir6 = TMP / "single_owner" / "plugins"
+    write_plugin(pdir6, "owner", body="    async def on_enable(self): ...\n")
+    mgr6, bus6, timer6, cmds6 = make_mgr(pdir6)
+    p6 = PluginBase.__new__(PluginBase)
+    p6.name, p6.cmds, p6.timer = "owner", cmds6, timer6
+    p6.event_bus, p6._handlers, p6._handlers_base = bus6, [], 0
+    p6._timers, p6._client_hooks, p6._databases, p6.logger = [], [], {}, _logger()
+
+    async def _noop(packet=None, event=None):
+        return "x"
+
+    cmds6.register("owned", aliases=["ow"])(_noop)
+    check("别名注册成功", cmds6.find_command("ow") is not None)
+    p6.stop_command("owned")
+    check("stop_command 连别名一起回收（旧实现只 pop 主名）",
+          cmds6.find_command("owned") is None and cmds6.find_command("ow") is None)
+
+    check("stop_timer 对不存在的任务返回 False（旧实现恒 True）",
+          p6.stop_timer("never_existed") is False)
+    async def _tick():
+        return None
+    timer6.every(3600, name="owned.tick")(_tick)
+    p6._timers.append("owned.tick")
+    check("stop_timer 对存在的任务返回 True 并清掉记账",
+          p6.stop_timer("owned.tick") is True and "owned.tick" not in p6._timers)
+
+    # 安装中的 `.new-<名>` 与回收站 `.trash` 都带 __init__.py：不能当成插件
+    (pdir6 / ".new-owner").mkdir()
+    (pdir6 / ".new-owner" / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+    (pdir6 / ".trash" / "owner-20260101").mkdir(parents=True)
+    (pdir6 / ".trash" / "owner-20260101" / "__init__.py").write_text(
+        "x = 1\n", encoding="utf-8")
+    names = mgr6._plugin_names()
+    check("插件发现只认普通目录/单文件",
+          names == ["owner"], str(names))
+    check("发现结果与公开的 discover_plugins 一致",
+          names == discover_plugins(pdir6), str(discover_plugins(pdir6)))
+
+    # 入口类缓存：同一份源码不重复导入，源码变了立刻失效
+    pdir7 = TMP / "class_cache" / "plugins"
+    write_plugin(pdir7, "cached", init=(
+        "from napcat.plugin import PluginBase\n"
+        "MARK = '1'\n"
+        "class CachedPlugin(PluginBase):\n"
+        "    name = 'cached'\n"
+        "    version = MARK\n"))
+    mgr7, _bus7, timer7, _cmds7 = make_mgr(pdir7)
+    first = mgr7.plugin_class("cached")
+    check("首次读到的版本是 1", first is not None and first.version == "1")
+    check("二次读取命中缓存（同一个类对象）", mgr7.plugin_class("cached") is first)
+    (pdir7 / "cached" / "__init__.py").write_text(
+        "from napcat.plugin import PluginBase\n"
+        "MARK = '2'\n"
+        "class CachedPlugin(PluginBase):\n"
+        "    name = 'cached'\n"
+        "    version = MARK\n", encoding="utf-8")
+    stamp = time.time() + 2
+    Path(pdir7 / "cached" / "__init__.py").touch()
+    import os as _os
+    _os.utime(pdir7 / "cached" / "__init__.py", (stamp, stamp))
+    second = mgr7.plugin_class("cached")
+    check("源码改了 → 缓存失效，读到新版本 2",
+          second is not first and second is not None and second.version == "2",
+          getattr(second, "version", "?"))
+    timer7.stop()
+    timer6.stop()
 
 
 # ==================== 8. 归属解析与 ai_chat 的 @ ====================

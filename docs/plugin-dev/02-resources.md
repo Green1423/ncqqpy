@@ -18,6 +18,7 @@
 | `self.deps` | `_DepsProxy` | **依赖访问**：`get()` / `has()` / `enabled()` / `require()`，见 (01-overview.md#13-声明依赖别的插件必需--可选) |
 | `self._groups` | `GroupBinding` | 群组绑定管理器 |
 | `self.client` | `NapCatClient` | 主客户端（**只读**：连接状态、`launcher` 结果；注册回调请用 `self.on_ws_*`，见 (#22-读取连接状态--拉起结果selfclient)） |
+| `self.manager` | `PluginManager` | 管着本插件的插件管理器（`get()` / `load()` / `reload()`）；手搓宿主时退回 `client.plugins` |
 
 ## 2.1 快捷方法
 
@@ -40,9 +41,9 @@
 | `self.dependency_check()` | 现场自查依赖是否满足（见 (01-overview.md#13-声明依赖别的插件必需--可选)）|
 | `self.pause_event(hid)` | 暂停指定事件监听器 |
 | `self.resume_event(hid)` | 恢复指定事件监听器 |
-| `self.stop_command(name)` | 删除指定命令 |
+| `self.stop_command(name)` | 删除指定命令（连它的别名一起，与 `/stop command` 同一条路径） |
 | `self.pause_command(name)` | 启用/禁用命令（toggle，禁用后返回"命令不存在"） |
-| `self.stop_timer(name)` | 取消指定定时任务 |
+| `self.stop_timer(name)` | 取消指定定时任务（返回它原本是否存在） |
 | `self.pause_timer(name)` | 暂停指定定时任务 |
 | `self.resume_timer(name)` | 恢复指定定时任务 |
 

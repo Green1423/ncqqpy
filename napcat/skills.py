@@ -20,18 +20,114 @@ async def on_load(self):
 * **只映射自己插件的命令**（防止把别人的命令包装成自己的技能绕过权限）；
 * **命令不存在就不注册**（插件还没注册命令时别硬挂，`SkillRegistry.resolve`
   会在消费侧再查一次，查不到就跳过，模型不会看到死工具）。
+
+本模块同时提供技能表与工具表共用的 `NamedRegistry` 骨架（命名空间归一化 +
+按插件整批回收）—— 两条通道的区别在**内容物**（命令映射 vs handler），
+簿记逻辑没必要各写一份。
 """
 from __future__ import annotations
 
-import inspect
 import re
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Callable, Optional
 
-#: 技能名允许的字符：字母数字、下划线、连字符、点（点用于 `插件.技能` 的分隔）
-_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
+#: 注册名允许的字符：字母数字、下划线、连字符、点（点用于 `插件.技能` 的分隔）
+NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
 #: 暴露给模型时的名字（OpenAI 函数名约束）
 _TOOL_NAME_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def qualify_name(plugin: str, name: str) -> str:
+    """`("byrdocs", "search")` → `"byrdocs.search"`（已经是全名就原样返回）。
+
+    命名空间归一化只有这一份实现：技能表、工具表和 `PluginBase` 的便捷入口
+    都调它（以前三处各写一遍带前缀判断的代码）。
+    """
+    n = str(name or "").strip()
+    p = str(plugin or "").strip()
+    if p and not n.startswith(p + "."):
+        return f"{p}.{n}"
+    return n
+
+
+def tool_name_for(name: str) -> str:
+    """给模型看的函数名（点号换成下划线，只留 OpenAI 允许的字符）。"""
+    return _TOOL_NAME_RE.sub("_", str(name or ""))[:64]
+
+
+class NamedRegistry:
+    """按「插件名.名字」存取的注册表骨架（技能表 / 工具表共用）。
+
+    子类只管两件事：`register()` 的参数校验与数据类语义。查询、按插件整批
+    回收、命名空间归一化都在这里 —— 这些曾经在两个注册表里各写了一份，
+    连 `list()` 的默认参数与排序都悄悄不一致。
+
+    子类通过类属性描述差异：
+
+    - `LOG_TAG`：日志前缀（`skills` / `tools`）；
+    - `LABEL`：日志里的分类名（`技能` / `工具`）；
+    - `SORTED`：`list()` 是否按名字排序（技能排、工具保持注册顺序）。
+    """
+
+    LOG_TAG = "registry"
+    LABEL = "条目"
+    SORTED = True
+
+    def __init__(self, *, logger=None) -> None:
+        self._entries: dict[str, Any] = {}
+        self.logger = logger
+
+    # ---- 查询 ----
+
+    def get(self, name: str):
+        return self._entries.get(str(name or ""))
+
+    def list(self, *, exclude: str = "") -> list:
+        """所有条目（可按提供方过滤：调用方通常要排除自己）。
+
+        Args:
+            exclude: 提供方插件名；空串表示不过滤。
+
+        Returns:
+            条目列表；`SORTED` 为真时按名字排序。
+        """
+        out = [e for e in self._entries.values() if not exclude or e.plugin != exclude]
+        if self.SORTED:
+            out.sort(key=lambda e: e.name)
+        return out
+
+    def by_tool_name(self, tool_name: str):
+        want = str(tool_name or "")
+        for entry in self._entries.values():
+            if entry.tool_name == want:
+                return entry
+        return None
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __contains__(self, name: str) -> bool:
+        return str(name or "") in self._entries
+
+    @staticmethod
+    def qualify(plugin: str, name: str) -> str:
+        """把 `插件名 + 短名` 拼成全名（见 `qualify_name`）。"""
+        return qualify_name(plugin, name)
+
+    # ---- 撤销 ----
+
+    def unregister(self, name: str) -> bool:
+        return self._entries.pop(str(name or ""), None) is not None
+
+    def unregister_plugin(self, plugin: str) -> int:
+        """插件卸载/禁用时把它注册的条目整批撤掉（否则模型会调用到死函数）。"""
+        gone = [n for n, e in self._entries.items() if e.plugin == plugin]
+        for n in gone:
+            self._entries.pop(n, None)
+        if gone and self.logger:
+            self.logger.info("[%s] %s 撤销了 %d 个%s", self.LOG_TAG, plugin,
+                             len(gone), self.LABEL)
+        return len(gone)
 
 
 @dataclass
@@ -95,7 +191,7 @@ class Skill:
     @property
     def tool_name(self) -> str:
         """给模型看的函数名（点号换成下划线，只留合法字符）。"""
-        return _TOOL_NAME_RE.sub("_", self.name)[:64]
+        return tool_name_for(self.name)
 
     def command_line(self) -> str:
         """/byrdocs search（命令名里的点换成空格，即用户手敲的样子）。"""
@@ -105,18 +201,16 @@ class Skill:
         return f"`{self.name}` → {self.command_line()} · {self.plugin}"
 
 
-class SkillRegistry:
+class SkillRegistry(NamedRegistry):
     """全局技能表（`PluginManager` 持有一个，所有插件共享）。
 
     为什么放在框架而不是 `ai_chat` 里：提供方是**别的插件**，它们不该为了
     给 AI 用而依赖 `ai_chat`（否则装/卸顺序、可选依赖都会变成坑）。
     """
 
-    def __init__(self, *, logger=None) -> None:
-        self._skills: dict[str, Skill] = {}
-        self.logger = logger
-
-    # ---- 注册 ----
+    LOG_TAG = "skills"
+    LABEL = "技能"
+    SORTED = True
 
     def register(self, plugin: str, name: str, *, command: str = "",
                  description: str = "", prompt_hint: str = "", when: str = "",
@@ -132,8 +226,8 @@ class SkillRegistry:
         Raises:
             ValueError: 名字非法、没给 command、或映射了**别人**的命令。
         """
-        full = self.qualify(plugin, name)
-        if not _NAME_RE.match(full):
+        full = qualify_name(plugin, name)
+        if not NAME_RE.match(full):
             raise ValueError(
                 f"技能名不合法：{full!r}（只允许字母数字、下划线、连字符、点，"
                 f"最长 64）")
@@ -160,55 +254,8 @@ class SkillRegistry:
                       # `when=` 是别名：两个名字都会有人写，语义相同
                       prompt_hint=str(prompt_hint or when or "").strip(),
                       deliver=deliver)
-        self._skills[full] = skill
+        self._entries[full] = skill
         if self.logger:
             self.logger.info("[skills] %s 注册技能 %s → %s",
                              plugin, full, skill.command_line())
         return skill
-
-    @staticmethod
-    def qualify(plugin: str, name: str) -> str:
-        """`("byrdocs", "search")` → `"byrdocs.search"`（已经是全名就原样返回）。"""
-        n = str(name or "").strip()
-        p = str(plugin or "").strip()
-        if p and not n.startswith(p + "."):
-            return f"{p}.{n}"
-        return n
-
-    # ---- 查询 ----
-
-    def list(self, *, exclude: Optional[str] = None) -> list[Skill]:
-        """所有技能（可按提供方过滤：调用方通常要排除自己）。"""
-        out = [s for s in self._skills.values() if s.plugin != exclude]
-        out.sort(key=lambda s: s.name)
-        return out
-
-    def get(self, name: str) -> Optional[Skill]:
-        return self._skills.get(str(name or ""))
-
-    def by_tool_name(self, tool_name: str) -> Optional[Skill]:
-        want = str(tool_name or "")
-        for skill in self._skills.values():
-            if skill.tool_name == want:
-                return skill
-        return None
-
-    def __len__(self) -> int:
-        return len(self._skills)
-
-    def __contains__(self, name: str) -> bool:
-        return str(name) in self._skills
-
-    # ---- 撤销 ----
-
-    def unregister(self, name: str) -> bool:
-        return self._skills.pop(str(name or ""), None) is not None
-
-    def unregister_plugin(self, plugin: str) -> int:
-        """插件卸载/禁用时把它注册的技能一起撤掉（否则模型会调用到死函数）。"""
-        gone = [n for n, s in self._skills.items() if s.plugin == plugin]
-        for n in gone:
-            self._skills.pop(n, None)
-        if gone and self.logger:
-            self.logger.info("[skills] %s 撤销了 %d 个技能", plugin, len(gone))
-        return len(gone)

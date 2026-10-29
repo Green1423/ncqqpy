@@ -16,7 +16,7 @@ import asyncio
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -51,7 +51,6 @@ class HeadInfo:
     ref: str
     sha: str = ""
     date: str = ""
-    message: str = ""
     #: 拿不到 SHA（API 限流等）时为真：此时**不能**断言「已是最新」
     unknown: bool = False
     note: str = ""
@@ -64,10 +63,8 @@ class ArchiveInfo:
     path: Path
     repo: str
     ref: str
-    size: int = 0
     #: 下载时实际生效的提交（响应头里带的，缺省为空）
     sha: str = ""
-    warnings: list[str] = field(default_factory=list)
 
 
 def _auth_headers(token: str = "") -> dict[str, str]:
@@ -166,24 +163,20 @@ class GithubClient:
 
     async def fetch_json(self, url: str, *, cache_ttl: float = 0.0,
                          retries: int = 2) -> Any:
-        """拉 JSON（带可选 TTL 缓存 + ETag 条件请求）。
+        """拉 JSON（TTL 缓存 + ETag 条件请求）。
 
-        `cache_ttl <= 0` 表示不缓存。命中缓存时**不会**产生任何请求。
+        `cache_ttl > 0` 且缓存未过期时**不产生任何请求**；`cache_ttl <= 0`
+        表示「一定要问服务器」，但**仍然带上 ETag** —— 没变时只回 304、
+        不计入正文配额。两件事分开：TTL 管「要不要问」，ETag 管「问得多便宜」。
         """
-        if cache_ttl > 0:
-            cached = self._cache.get(url)
-            if cached and (time.monotonic() - cached[0]) < cache_ttl:
-                return cached[2]
+        cached = self._cache.get(url)
+        if cache_ttl > 0 and cached and (time.monotonic() - cached[0]) < cache_ttl:
+            return cached[2]
 
-        headers = {}
-        etag = self._cache.get(url, (0, "", None))[1]
-        if etag and cache_ttl > 0:
-            headers["If-None-Match"] = etag
-
+        headers = {"If-None-Match": cached[1]} if cached and cached[1] else {}
         status, resp_headers, body = await self._request("GET", url, headers=headers,
                                                          retries=retries)
         if status == 304:
-            cached = self._cache.get(url)
             if cached:
                 self._cache[url] = (time.monotonic(), cached[1], cached[2])
                 return cached[2]
@@ -195,9 +188,8 @@ class GithubClient:
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise GithubError(f"返回的不是合法 JSON：{url}") from exc
 
-        if cache_ttl > 0:
-            self._cache[url] = (time.monotonic(),
-                                resp_headers.get("ETag", ""), data)
+        # 无论 TTL 是否为 0 都留一份：下一次请求要靠它的 ETag 做条件请求
+        self._cache[url] = (time.monotonic(), resp_headers.get("ETag", ""), data)
         return data
 
     def _raise_for_status(self, status: int, url: str, body: bytes,
@@ -254,7 +246,6 @@ class GithubClient:
             ref=ref or "(default)",
             sha=str(data.get("sha") or ""),
             date=str(committer.get("date") or ""),
-            message=str(commit.get("message") or "").splitlines()[0][:120],
         )
 
     async def fetch_archive(self, repo: str, ref: str, dest_dir: Path,
@@ -300,8 +291,7 @@ class GithubClient:
         if target.stat().st_size == 0:
             target.unlink(missing_ok=True)
             raise GithubError(f"源码包是空的：{repo}@{ref}")
-        return ArchiveInfo(path=target, repo=repo, ref=ref,
-                           size=target.stat().st_size, sha=sha)
+        return ArchiveInfo(path=target, repo=repo, ref=ref, sha=sha)
 
 
 def _safe_ref(ref: str) -> str:

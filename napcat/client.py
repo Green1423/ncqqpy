@@ -116,6 +116,8 @@ class WsHandler:
         self._ws: Optional[ClientConnection] = None
         self._running = False
         self._pending: dict[str, asyncio.Future] = {}
+        #: 流式响应：echo → 数据包队列（一条请求会收到多个同 echo 的 WS 消息）
+        self._streams: dict[str, asyncio.Queue] = {}
         self._msg_queue = asyncio.Queue(maxsize=10000)
         self._processor_task: Optional[asyncio.Task] = None
         self._send_lock = asyncio.Lock()
@@ -364,6 +366,10 @@ class WsHandler:
             self._pending.pop(echo, None)
             if not future.done():
                 future.set_exception(exc)
+        # 流式请求没有 future：放一个 None 让消费者立刻结束并报连接断开
+        for queue in list(self._streams.values()):
+            with contextlib.suppress(Exception):
+                queue.put_nowait(None)
 
     async def _wait_ready(self) -> None:
         """等到连接可用。
@@ -397,7 +403,7 @@ class WsHandler:
         finally:
             self._queued -= 1
 
-    async def send(self, data: dict):
+    async def send(self, data: dict, *, throttle: bool = True):
         # 掉线时在这里排队（不占用发送锁），重连后统一补发
         while True:
             await self._wait_ready()
@@ -406,7 +412,7 @@ class WsHandler:
                 ws = self._ws
                 if ws is None:
                     continue                   # 等待节流期间又断了 → 回队列
-                delay = self._next_delay()
+                delay = self._next_delay() if throttle else 0.0
                 if delay > 0:
                     await asyncio.sleep(delay)
                     ws = self._ws
@@ -419,17 +425,50 @@ class WsHandler:
         lo, hi = self.api_delay
         return random.uniform(lo, hi) if hi > 0 else 0.0
 
-    async def request(self, payload: dict, timeout: float = 30.0) -> ApiResponse:
+    async def request(self, payload: dict, timeout: float = 30.0, *,
+                      throttle: bool = True) -> ApiResponse:
         echo = payload.get("echo", "")
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         self._pending[echo] = future
         try:
-            await self.send(payload)
+            await self.send(payload, throttle=throttle)
             result = await asyncio.wait_for(future, timeout=timeout)
             return ApiResponse(**result) if isinstance(result, dict) else result
         finally:
             self._pending.pop(echo, None)
+
+    async def stream_request(self, payload: dict,
+                             timeout: float = 60.0):
+        """发起**流式** action，逐条产出服务端推送的数据包。
+
+        NapCat 的流式文件接口（`download_file_stream` 等）会先用一条
+        `data.type == "stream"` 的消息发文件信息/分片，最后一条
+        `data.type == "response"` 表示结束；这些消息共用同一个 `echo`。
+        普通 `request()` 只等第一条，会把后续分片丢掉，所以单独走这里。
+
+        `timeout` 是**单条数据包**的等待上限（下载大文件时每片间隔很小，
+        不会因为总时长超时）。
+        """
+        echo = payload.get("echo", "")
+        queue: asyncio.Queue = asyncio.Queue()
+        self._streams[echo] = queue
+        try:
+            await self.send(payload)
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=timeout)
+                except asyncio.TimeoutError as exc:
+                    raise TimeoutError(
+                        f"流式响应超时（{timeout:.0f}s 内没有新数据）") from exc
+                if data is None:
+                    raise ConnectionError("WebSocket 连接已断开（流式传输中断）")
+                yield data
+                body = data.get("data") or {}
+                if body.get("type") in ("response", "error"):
+                    return
+        finally:
+            self._streams.pop(echo, None)
 
     async def _receive_loop(self):
         while self._running:
@@ -466,6 +505,11 @@ class WsHandler:
             try:
                 data = await self._msg_queue.get()
                 echo = data.get("echo")
+
+                # 分支 0：流式响应（同 echo 的多条消息，交给 stream_request）
+                if echo and echo in self._streams and "post_type" not in data:
+                    self._streams[echo].put_nowait(data)
+                    continue
 
                 # 分支 1：API 响应（有匹配 echo 且无 post_type）
                 if echo and echo in self._pending and "post_type" not in data:

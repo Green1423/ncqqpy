@@ -149,6 +149,41 @@ class InstalledPlugin:
         )
 
 
+def write_json_atomic(path: Path, payload: dict) -> None:
+    """写一份 JSON：先写 `<名>.tmp` 再 `os.replace`，中途断掉不会留下半份文件。
+
+    记账（`installed.json`）、插件目录里的 `.ncqqpy-plugin.json`、列表文件的
+    磁盘缓存都走这一份实现 —— 以前三处各写一遍，其中一处不是原子写（断电
+    就坏一份记账，且坏掉的记账会被静默当成「没装过」）。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def clear_staging(staging_root: Path) -> None:
+    """清空暂存区（下载失败留下的源码包/解压目录不该在磁盘上攒垃圾）。
+
+    `Installer` 的安装收尾与 `plugin_manager` 的后台任务收尾共用这一份实现 ——
+    以前是两个，连「暂存区在哪」都各算了一遍（一个用 `staging_root`，一个用
+    `mdir()/".staging"` 字符串拼）。
+    """
+    root = Path(staging_root)
+    if not root.is_dir():
+        return
+    for path in root.iterdir():
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
 class InstalledStore:
     """`installed.json` 的读写（原子写：临时文件 + replace）。"""
 
@@ -174,14 +209,10 @@ class InstalledStore:
         return self._items
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"version": 1, "saved_at": now_iso(),
-                   "plugins": [self._items[k].to_dict()
-                               for k in sorted(self._items)]}
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        os.replace(tmp, self.path)
+        write_json_atomic(self.path, {
+            "version": 1, "saved_at": now_iso(),
+            "plugins": [self._items[k].to_dict() for k in sorted(self._items)],
+        })
 
     def get(self, name: str) -> Optional[InstalledPlugin]:
         return self._items.get(name)
@@ -405,7 +436,6 @@ class InstallResult:
     action: str                 # install / update / noop
     repo: str = ""
     ref: str = ""
-    old_sha: str = ""
     new_sha: str = ""
     version: str = ""
     plan: Optional[FilePlan] = None
@@ -573,8 +603,8 @@ class Installer:
                 and not force:
             shutil.rmtree(root.parent, ignore_errors=True)
             return InstallResult(name=entry.name, action="noop", repo=entry.repo,
-                                 ref=ref, old_sha=previous.sha,
-                                 new_sha=previous.sha, version=previous.version,
+                                 ref=ref, new_sha=previous.sha,
+                                 version=previous.version,
                                  plan=plan, notes=notes)
 
         # ---- 组装新目录 ----
@@ -628,7 +658,6 @@ class Installer:
         return InstallResult(name=entry.name,
                              action="update" if exists else "install",
                              repo=entry.repo, ref=ref,
-                             old_sha=(previous.sha if previous else ""),
                              new_sha=record.sha, version=record.version,
                              plan=plan, backup=backup, notes=notes)
 
@@ -661,18 +690,9 @@ class Installer:
             files=files,
         )
 
-    def adopt(self, name: str, record: InstalledPlugin) -> None:
-        """把一份「本地重建出来」的记账写回去（接管手工安装的插件）。"""
-        self.store.put(record)
-        target = self.local_dir(name)
-        if target.is_dir():
-            self._write_local_meta(target, record)
-
     def _write_local_meta(self, target: Path, record: InstalledPlugin) -> None:
         try:
-            (target / META_FILE).write_text(
-                json.dumps(record.to_dict(), ensure_ascii=False, indent=2),
-                encoding="utf-8")
+            write_json_atomic(target / META_FILE, record.to_dict())
         except OSError as exc:
             if self.logger:
                 self.logger.warning("[plugin_manager] 写 %s 失败：%s", META_FILE, exc)
@@ -690,17 +710,7 @@ class Installer:
         return dest
 
     def _cleanup_staging(self) -> None:
-        """清暂存区（解压目录 + 已解压的源码包）。"""
-        for path in list(self.staging_root.glob("*")):
-            if path.name in ("installed.json",):
-                continue
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+        clear_staging(self.staging_root)
 
     # ---- 回收站 ----
 

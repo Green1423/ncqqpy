@@ -6,6 +6,32 @@
 
 调用方式：`await self.api.<方法>(...)`；返回值是响应里的 `data` 字段（失败抛 `ApiError`）。
 
+## 流式文件接口（`FileManager`）
+
+下载类 action（`download_file_stream` / `download_file_image_stream` /
+`download_file_record_stream`）不是一问一答：一条请求会收到多条同 `echo` 的
+WebSocket 消息：
+
+| 数据包 | 含义 |
+|--------|------|
+| `data.type = stream`、`data_type = file_info` | 文件名 / 总大小 / 分块大小 |
+| `data.type = stream`、`data_type = file_chunk` | Base64 分片（`index` / `size` / `progress`） |
+| `data.type = response`、`data_type = file_complete` | 结束（总块数 / 总字节） |
+| `data.type = error` | 失败原因 |
+
+上传走 `upload_file_stream`：同一 `stream_id` 反复调用，每次带一个 Base64 分片；
+服务端依次返回 `file_created` / `chunk_received` / `file_complete`（含 `file_path`）。
+
+对使用者来说不需要自己处理这些包：
+
+```python
+async for chunk in api.download_file_stream(file=url): ...
+await api.upload_file_stream("./big.zip", on_progress=...)
+```
+
+`FileManager` 在 `ApiClient` 之上提供 `download_to_file` / `download_bytes` /
+`upload_stream` / `clean_temp`，见 [文件管理](../guide/09-files.md)。
+
 ## AI
 
 | 方法 | action | 说明 |

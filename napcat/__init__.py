@@ -181,8 +181,8 @@ _LEGACY = {'ApiClient': ['api', 'ApiClient'],
 #: 允许 `napcat.<子模块>` 这种属性访问（`import napcat` 后直接取子模块）
 _SUBMODULES = {
     "api", "client", "command", "config", "deps", "errors", "events",
-    "file_manager", "launcher", "message", "models", "permission", "plugin",
-    "qr_text", "registry", "store", "watchdog",
+    "file_manager", "launcher", "message", "models", "permission", "persist",
+    "plugin", "qr_text", "registry", "scope", "store", "watchdog",
 }
 
 

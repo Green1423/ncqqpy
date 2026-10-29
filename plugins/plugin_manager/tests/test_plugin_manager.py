@@ -135,7 +135,7 @@ class FakeGithub:
             return HeadInfo(repo=repo, ref=ref or "(default)", unknown=True,
                             note="假客户端：拿不到")
         return HeadInfo(repo=repo, ref=ref or "(default)", sha=self.head_sha,
-                        date=self.head_date, message="测试提交")
+                        date=self.head_date)
 
     async def fetch_archive(self, repo, ref, dest_dir, *, progress=None):
         from plugin_manager.github import ArchiveInfo
@@ -144,8 +144,7 @@ class FakeGithub:
         dest_dir.mkdir(parents=True, exist_ok=True)
         path = dest_dir / f"{repo.replace('/', '__')}-{ref}.tar.gz"
         path.write_bytes(make_tarball(self.files, top=self.top))
-        return ArchiveInfo(path=path, repo=repo, ref=ref,
-                           size=path.stat().st_size, sha=self.head_sha)
+        return ArchiveInfo(path=path, repo=repo, ref=ref, sha=self.head_sha)
 
     def clear_cache(self):
         self.cleared = True
@@ -663,8 +662,7 @@ async def test_resilience(work: Path):
     harness.use_fake_github()
     await harness.run("/plugin refresh")
     from plugin_manager.github import GithubError
-    plugin._manifest_cache = None
-    plugin._client_obj.clear_cache()      # TTL=0 时的 5 秒去重缓存也要清
+    plugin._client_obj.clear_cache()      # 假客户端没有缓存，这里只是走一遍真实路径
     harness.fake.manifest_error = GithubError("假客户端：断网了")
     out = await harness.run("/plugin list")
     check("断网时用本地缓存列表并标注",
@@ -672,14 +670,12 @@ async def test_resilience(work: Path):
     # 连磁盘缓存与客户端内部缓存都拿掉 → 必须如实报错，而不是装作「列表是空的」
     plugin.cached_manifest_path().unlink(missing_ok=True)
     plugin._client_obj.clear_cache()
-    plugin._manifest_cache = None
     # 框架把命令里的异常渲染成「一句带编号的回话」而不是抛给调用方 ——
     # 断言这句回话里确实有失败原因（而不是拿旧列表糊弄过去）
     out = await harness.run("/plugin refresh")
     check("断网且无缓存时如实报错",
           out is not None and "断网" in out and "已重新拉取" not in out, str(out))
     harness.fake.manifest_error = None
-    plugin._manifest_cache = None
 
     # /plugin add：列表外的仓库
     harness.use_fake_github()

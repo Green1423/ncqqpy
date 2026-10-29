@@ -16,7 +16,7 @@
 | `judge.py` | 编译 / 运行 / 比对 / 评分 | 标准库 subprocess + resource |
 | `review.py` | 代码审查：静态规则 + 模型审查 | aiohttp |
 | `coach.py` | 判完分后的 AI 点评（后台任务，失败静默） | aiohttp |
-| `gen.py` | AI 出测试点：要参考解 + 输入，输出由参考解跑出 | aiohttp |
+| `gen.py` | AI 出测试点：一次一组（输入 + 输出），重复到凑满 | aiohttp |
 | `markdown.py` | Markdown 子集 → HTML（全转义） | 标准库 |
 | `render.py` | HTML → PNG（两趟 Chromium） | markdown |
 
@@ -34,7 +34,7 @@ Submission（提交）         problem_id + user_id + status + score + detail(JS
 ```
 
 - 题目按 `key` 去重：洛谷题号或标题哈希。同标题再保存是**更新**；
-- 卡人测试点上限 `max_cases`（默认 10），超过时**整批不写**（不做「写一半」）；
+- 测试点上限 `max_cases`（默认 10），超过时**整批不写**（不做「写一半」）；
 - 题组不存分数：榜单从 `Submission` 现算（每题取历史最高分），
   所以同一道题在多个题组里口径一致。
 
@@ -59,8 +59,8 @@ cd /ncqqpy
 | 命令 | 两步交题、取消、result、list、cases、del 权限 |
 | 文件交题 | 后缀判语言、BOM/GB18030、二进制拒收、引用文件、群文件上传 |
 | AI 点评 | 先分数后点评、模型 500 不影响判题、关掉后只有判题消息 |
-| AI 测试点 | 参考解过样例才入库、输出由参考解算出、跑挂的组丢掉 |
-| 绑定 | 群 / 私聊 / 小窗、独立名单（不回落框架）、`empty_means`、`/oj bind`、工具 ctx |
+| AI 测试点 | 一次一组、重复输入去重、缺 output 报错、逐组凑满 10 组 |
+| 绑定 | 群 / 私聊 / 小窗、独立名单（不回落框架）、空 = 谁都不用、`/oj bind`、工具 ctx |
 
 判题与出图**不打桩**：它们是这个插件的核心风险面，用桩会掩盖真实行为。
 

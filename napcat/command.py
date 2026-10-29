@@ -9,7 +9,7 @@ import re
 import shlex
 import inspect
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Any, Type, Union, get_type_hints
+from typing import Callable, Optional, Any, Type
 
 
 # ==================== 参数验证系统 ====================
@@ -2007,10 +2007,7 @@ class CommandManager:
             return f"未找到事件监听器: {target}"
 
         def _cmd_stop_command(packet: CommandPacket, target: str):
-            removed = self._commands.pop(target, None)
-            if removed is not None:
-                # 别名与命令共用 handler：不一起删会留下「命令没了但别名还能用」
-                self._drop_alias_entries(removed)
+            if self.unregister(target):
                 return f"命令 /{target} 已移除"
             return f"未找到命令: /{target}"
 
@@ -2037,11 +2034,10 @@ class CommandManager:
             return f"事件监听器 {target} 已暂停"
 
         def _cmd_pause_command(packet: CommandPacket, target: str):
-            h = self._commands.get(target)
-            if h is None:
+            if not self.set_disabled(target):
                 return f"未找到命令: /{target}"
-            h.disabled = not h.disabled
-            return f"命令 /{target} 已{'禁用' if h.disabled else '启用'}"
+            disabled = self._commands[target].disabled
+            return f"命令 /{target} 已{'禁用' if disabled else '启用'}"
 
         def _cmd_pause_timer(packet: CommandPacket, target: str):
             tm = self._timer_ref
@@ -2821,6 +2817,21 @@ class CommandManager:
         if handler is None:
             return False
         self._drop_alias_entries(handler)
+        return True
+
+    def set_disabled(self, name: str, disabled: Optional[bool] = None) -> bool:
+        """启用/禁用一条命令（`disabled=None` 表示取反）；返回命令是否存在。
+
+        「禁用命令」原来有两个落点：`/pause command` 与插件侧的
+        `PluginBase.pause_command()`，各自写一遍 `handler.disabled = not ...`。
+        统一到这里，插件侧只做转发 —— 否则两边迟早对「别名算不算同一条命令」
+        给出不同答案。
+        """
+        handler = self._commands.get(str(name or ""))
+        if handler is None:
+            return False
+        handler.disabled = ((not handler.disabled) if disabled is None
+                            else bool(disabled))
         return True
 
     def list_commands(self) -> dict[str, CommandHandler]:

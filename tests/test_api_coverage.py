@@ -230,7 +230,8 @@ def api_actions() -> dict[str, str]:
             continue
         for node in ast.walk(fn):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                    and node.func.attr == "_call" and node.args \
+                    and node.func.attr in ("_call", "_stream_packets", "_download_bytes") \
+                    and node.args \
                     and isinstance(node.args[0], ast.Constant):
                 out.setdefault(str(node.args[0].value), fn.name)
     return out
@@ -258,7 +259,7 @@ class _Result:
 class _FakeWs:
     def __init__(self):
         self.calls = []
-    async def request(self, payload):
+    async def request(self, payload, timeout=30.0, *, throttle=True):
         self.calls.append(payload)
         return _Result()
 

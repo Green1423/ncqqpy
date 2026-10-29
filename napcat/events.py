@@ -8,7 +8,7 @@ import inspect
 import logging
 import traceback
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Optional, Type, TypeVar
+from typing import Any, Callable, Coroutine, Type, TypeVar
 from collections import defaultdict
 
 from datetime import datetime, timedelta
@@ -342,11 +342,13 @@ class TimerManager:
         for name in list(self._tasks):
             self.cancel(name)
 
-    def cancel(self, name: str):
+    def cancel(self, name: str) -> bool:
+        """取消定时任务；返回它原本是否存在（让调用方能如实回报）。"""
+        meta = self._metas.pop(name, None)
         task = self._tasks.pop(name, None)
         if task:
             task.cancel()
-        self._metas.pop(name, None)
+        return meta is not None or task is not None
 
     def pause_timer(self, name: str) -> bool:
         meta = self._metas.get(name)

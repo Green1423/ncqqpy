@@ -501,19 +501,24 @@ def _describe_cycle(edges: Mapping[str, set[str]], nodes: set[str]) -> str:
     return "（无法定位具体环路）"
 
 
+def _order(plugins: Iterable[str],
+           deps_of: Callable[[str], tuple[Iterable[str], Iterable[str]]],
+           *, reverse: bool) -> list[str]:
+    """算一份拓扑序（`reverse=False` 依赖在前，`True` 使用者在前）。"""
+    known = list(plugins)
+    requires_edges, optional_edges = graph(known, deps_of)
+    return _topo(requires_edges, optional_edges, set(known), reverse=reverse)
+
+
 def load_order(plugins: Iterable[str],
                deps_of: Callable[[str], tuple[Iterable[str], Iterable[str]]]
                ) -> list[str]:
     """加载顺序：依赖在前（同名同层按字典序，结果稳定可测）。"""
-    known = list(plugins)
-    requires_edges, optional_edges = graph(known, deps_of)
-    return _topo(requires_edges, optional_edges, set(known), reverse=False)
+    return _order(plugins, deps_of, reverse=False)
 
 
 def unload_order(plugins: Iterable[str],
                  deps_of: Callable[[str], tuple[Iterable[str], Iterable[str]]]
                  ) -> list[str]:
     """卸载顺序：使用者在前（先撤依赖别人的，再撤被依赖的）。"""
-    known = list(plugins)
-    requires_edges, optional_edges = graph(known, deps_of)
-    return _topo(requires_edges, optional_edges, set(known), reverse=True)
+    return _order(plugins, deps_of, reverse=True)

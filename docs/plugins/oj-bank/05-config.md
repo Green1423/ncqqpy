@@ -10,7 +10,7 @@
 ```json
 {
   "data_dir": "",
-  "binding": {"groups": [], "users": [], "empty_means": "deny"},
+  "binding": {"groups": [], "users": []},
   "max_cases": 10,
   "list_page_size": 8,
   "judge": {
@@ -44,9 +44,14 @@
   },
   "gen": {
     "enabled": true,
+    "auto_insert": true,
+    "retry_missing": 1,
+    "backfill_on_start": true,
+    "backfill_limit": 5,
     "count": 10,
+    "max_seconds": 600,
     "timeout": 180,
-    "max_tokens": 4096,
+    "max_tokens": 16384,
     "max_statement_chars": 6000,
     "max_input_chars": 20000,
     "base_url": "",
@@ -91,13 +96,13 @@
 | `data_dir` | 数据目录；空 = `plugins/oj_bank/data`。sqlite、判题临时目录、出图都在它下面 |
 | `binding.groups` | 允许使用的**群号**列表（独立名单，不看框架的 `bound_groups`） |
 | `binding.users` | 允许**直接私聊**使用的 QQ 列表（小窗按来源群判） |
-| `binding.empty_means` | 两份名单都为空时的语义：`deny`（默认）/ `allow` |
-| `max_cases` | 每题最多几组卡人测试点（默认 10，与题面要求一致） |
+| — | —— |
+| `max_cases` | 每题最多几组测试点（默认 10，与题面要求一致） |
 | `list_page_size` | `/oj list` 每页几条（1..20） |
 
-> 绑定命令与 `empty_means` 的语义跟 `ai_chat` 一致，但**群名单不回落框架的
+> 绑定命令的语义跟 `ai_chat` / `byrdocs` 一致（见 `napcat.scope`），**群名单不回落框架的
 > `bound_groups`** —— 那是「机器人监听哪些群」，与「允许哪些群用本插件」是两件事。
-> **超级用户不豁免**（用 `/oj bind` 开通，或改这里）。运行期用
+> **超级用户豁免**（名单配错时仍能进来改；用 `/oj bind` 开通，或改这里）。运行期用
 > `/oj bind list|add|del` 管理，会写回本段。
 
 ### `judge`
@@ -134,9 +139,14 @@
 | 键 | 说明 |
 |----|------|
 | `enabled` | 开关（默认开；没配模型时自动跳过） |
+| `auto_insert` | 所有入库的题**自动**生成 10 组（默认开） |
+| `retry_missing` | 不够 10 组时再补几轮（默认 1） |
+| `backfill_on_start` | 启动时补「还没有测试点」的旧题（默认开） |
+| `backfill_limit` | 一次最多补几道（默认 5） |
 | `count` | 默认出几组（1..10） |
+| `max_seconds` | 整次生成的总时间预算（秒，默认 600）；超了就用已有结果收工 |
 | `timeout` | 整次生成超时（秒） |
-| `max_tokens` | 模型输出上限（要够写参考解 + N 组输入） |
+| `max_tokens` | 单次请求的输出上限（默认 16384；一组数据很小，这个值主要是留余量） |
 | `max_statement_chars` | 题面送审的截断长度 |
 | `max_input_chars` | 单组输入的长度上限 |
 | `base_url` / `model` / `api_key` | 留空借用 `plugins.ai_chat.llm`；也可用 `OJ_GEN_API_KEY` |
