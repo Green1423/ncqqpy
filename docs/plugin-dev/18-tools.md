@@ -45,6 +45,9 @@ class DemoPlugin(PluginBase):
 ```
 
 - handler 签名固定 `args: dict -> str`，**同步/异步都行**；
+- `prompt_hint="用户明确要查资料时才用；闲聊不要用"` 写进**系统提示**的
+  「使用时机」一节（`when=` 是别名）；`description` 只说明功能，
+  时机判断靠 `prompt_hint`；
 - 返回值会被截断到 `max_chars`（默认 4000）；
 - 名字全局唯一：`demo.lookup`，暴露给模型是 `demo_lookup`；
 - `prompt_hint`（可选）：一句话说明「什么时候该用我」。它会被消费方写进**系统提示**，

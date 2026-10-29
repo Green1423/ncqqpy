@@ -42,6 +42,29 @@
       "cache_size": 256
     }
   },
+  "gen": {
+    "enabled": true,
+    "count": 10,
+    "timeout": 180,
+    "max_tokens": 4096,
+    "max_statement_chars": 6000,
+    "max_input_chars": 20000,
+    "base_url": "",
+    "model": "",
+    "api_key": "",
+    "reasoning_effort": ""
+  },
+  "coach": {
+    "enabled": true,
+    "base_url": "",
+    "model": "",
+    "api_key": "",
+    "timeout": 60,
+    "max_tokens": 900,
+    "max_code_chars": 12000,
+    "max_chars": 700,
+    "reasoning_effort": ""
+  },
   "render": {
     "width": 760,
     "timeout": 45,
@@ -105,6 +128,34 @@
 | `ai.timeout` | 单次审查超时（秒） |
 | `ai.on_error` | 审查服务不可用时：`deny`（不判）/ `allow`（放行） |
 | `ai.cache_size` | 审查结果缓存条数 |
+
+### `gen`（AI 出测试点）
+
+| 键 | 说明 |
+|----|------|
+| `enabled` | 开关（默认开；没配模型时自动跳过） |
+| `count` | 默认出几组（1..10） |
+| `timeout` | 整次生成超时（秒） |
+| `max_tokens` | 模型输出上限（要够写参考解 + N 组输入） |
+| `max_statement_chars` | 题面送审的截断长度 |
+| `max_input_chars` | 单组输入的长度上限 |
+| `base_url` / `model` / `api_key` | 留空借用 `plugins.ai_chat.llm`；也可用 `OJ_GEN_API_KEY` |
+
+详见 [测试点从哪来](08-testcases.md)。
+
+### `coach`（判完分之后的 AI 点评）
+
+| 键 | 说明 |
+|----|------|
+| `enabled` | 点评开关（默认开；没配模型时自动跳过） |
+| `base_url` / `model` / `api_key` | 留空时**借用 `plugins.ai_chat.llm`**；任一项写了就以它为准 |
+| `timeout` | 单次点评超时（秒） |
+| `max_tokens` | 点评输出上限 |
+| `max_code_chars` | 送审代码的截断长度 |
+| `max_chars` | 点评回给用户前的截断长度 |
+| `reasoning_effort` | 推理预算；空 = 不传（普通模型不认这个字段） |
+
+密钥也可以用环境变量 `OJ_COACH_API_KEY`（优先）。
 
 ### `render`
 

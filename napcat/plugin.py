@@ -478,7 +478,7 @@ class PluginBase(ABC):
     def register_tool(self, name: str, *, description: str = "",
                       parameters: Optional[dict] = None, permission: str = "",
                       scope: str = "all", max_chars: int = 4000,
-                      prompt_hint: str = ""):
+                      prompt_hint: str = "", when: str = ""):
         """把一段能力注册成**工具**（模型调用、**结果回给模型**）。
 
             @self.register_tool("ping", description="测服务是否在线")
@@ -489,12 +489,15 @@ class PluginBase(ABC):
         发给用户，AI 不接话；工具是**自己写的 handler**，返回值给模型继续推理。
 
         `permission` / `scope` 在消费侧判（`ai_chat` 调用前检查，与命令同一口径）。
+        `prompt_hint` 是写进**系统提示**的一句话（「什么时候该调我」）——
+        工具 schema 的 description 模型不一定读，时机判断要更显眼。
         """
         def decorator(func):
             self.plugin_tools.register(self.name, name, func,
                                 description=description, parameters=parameters,
                                 permission=permission, scope=scope,
-                                max_chars=max_chars, prompt_hint=prompt_hint)
+                                max_chars=max_chars, prompt_hint=prompt_hint,
+                                when=when)
             return func
         return decorator
 
@@ -506,8 +509,8 @@ class PluginBase(ABC):
         return raw if raw.startswith(f"{self.name}.") else f"{self.name}.{raw}"
 
     def register_skill(self, name: str, *, command: str = "",
-                       description: str = "",
-                       deliver=None) -> "Skill":
+                       description: str = "", prompt_hint: str = "",
+                       when: str = "", deliver=None) -> "Skill":
         """把你的**一条命令**挂给 AI 使用（技能 = 命令映射，不另写 handler）。
 
             async def on_load(self):
@@ -524,6 +527,7 @@ class PluginBase(ABC):
         # 归属校验是「能校验就更严」，不该因此让注册失败
         return self.skills.register(
             self.name, name, command=command, description=description,
+            prompt_hint=prompt_hint, when=when,
             cmds=getattr(self, "cmds", None), deliver=deliver)
 
     def unregister_skill(self, name: str) -> bool:

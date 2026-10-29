@@ -17,7 +17,7 @@ async def on_load(self):
 | 项 | 来源 |
 |---|---|
 | 参数 schema | 直接取 `byrdocs.search` 的 **`CommandSchema`**（不另写一份，永不漂移） |
-| 说明 | 取命令的 `description` |
+| 说明 | 取命令的 `description`；可用 `prompt_hint=` 额外给一句**「什么时候该用」**（写进系统提示） |
 | 执行 | 走 **`CommandManager.handle()`**（合成一条真实消息事件） |
 | 权限 / 作用域 / 白名单 | **完全按命令判定** —— AI 这条路不绕过任何检查 |
 | 回复 | 命令的返回值；**给了 `deliver` 就由插件自己发**（推荐，见 17.2） |
@@ -79,3 +79,18 @@ self.skills.unregister_plugin("byrdocs") # 手工撤（一般不用，框架会�
 
 > ⚠️ 技能通道是**框架代码**：换框架版本要**重启进程**才生效（热重载只换插件）。
 > 旧进程里插件会打一行警告并跳过技能注册，命令不受影响。
+
+## 17.1b 什么时候该用我（`prompt_hint`）
+
+```python
+self.register_skill(
+    "recent", command="buptnews.list",
+    description="列出最近/置顶的通知清单",
+    prompt_hint="用户明确要『最近有什么通知』时用；"
+                "只是引用一条通知问『现在呢』不要用")
+```
+
+- `description` 说明**能干什么**，`prompt_hint` 说明**何时用 / 何时不要用**；
+- 它会被写进 ai_chat 系统提示的「插件工具/技能的使用时机」一节，
+  模型选工具时看得见（藏在 schema 里常常被忽略）；
+- `when=` 是它的别名，两个名字等价。

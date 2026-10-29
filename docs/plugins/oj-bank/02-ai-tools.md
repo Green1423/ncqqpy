@@ -20,7 +20,8 @@
 | 工具名（模型看到的） | 入参 | 作用 |
 |---|---|---|
 | `oj_bank_save_problem` | **必填** `title` `statement`；建议 `input_format` `output_format` `sample_input` `sample_output` `note` `source` `url` `difficulty` `tags`；可选 `testcases[]` | 任何来源的题都能入库（洛谷 / Codeforces / AtCoder / LeetCode / 教材 / AI 自拟） |
-| `oj_bank_cases` | `problem_id` `cases[]` `replace` | 补 / 换卡人测试点（每题最多 10 组，可分批） |
+| `oj_bank_generate_cases` | `problem_id` `count` `replace` | **让 AI 出测试点**（参考解跑出标准输出，推荐） |
+| `oj_bank_cases` | `problem_id` `cases[]` `replace` | 手写 / 覆盖卡人测试点（每题最多 10 组，可分批） |
 | `oj_bank_luogu` | `pid` `overwrite` | **只在用户明确给了洛谷题号时**用；其它来源走 `save_problem` |
 | `oj_bank_get_problem` | `ident` | 取题目全文（模型回答「题库里那道题」时先取，别凭记忆） |
 | `oj_bank_list` | `keyword` `limit` | 列题库 |
@@ -42,6 +43,15 @@
      → oj_bank_cases(problem_id=7, cases=[…])
 工具：✅ #7 砍树：写入 10 组，现在卡人测试点 10/10 组
 模型：已经存好了，是 #7《砍树》，发 /oj show 7 可以看题、/oj submit 7 cpp 交题。
+```
+
+没有测试点时**优先让插件出**，而不是让模型手写输出：
+
+```text
+用户：这道题帮我出点测试数据
+模型：→ oj_bank_generate_cases(problem_id=7, count=10)
+工具：✅ 已生成 9 组测试点（参考解 C++17，输出由参考解跑出）；丢弃：第 6 组（TLE）
+模型：#7 现在有 9 组卡人测试点了，可以发 /oj submit 7 cpp 开始交题。
 ```
 
 ## 2.2 为什么是「结果回模型」
@@ -87,7 +97,8 @@ async def save_problem(args: dict, ctx=None):
 插件工具的使用时机：
 - 用户让你搜题、找题、出题，或说「存进题库」「记下来」时：找到题目后先调
   oj_bank_save_problem 存进题库，再回答（来源不限……）。
-- 题库里的题缺测试点时用 oj_bank_cases 补（最多 10 组，可分批）。
+- 题库里的题缺测试点时用 oj_bank_generate_cases 让 AI 生成（推荐），
+  或 oj_bank_cases 手写（最多 10 组，可分批）。
 - 用户明确给出洛谷题号（如 P1001）时用 oj_bank_luogu 抓题；其它来源用 save_problem。
 ```
 

@@ -78,6 +78,12 @@ class Skill:
     plugin: str = ""
     #: 说明（不给就用命令自己的 description）
     description: str = ""
+    #: 给**系统提示**用的一句话：「什么时候该用它」。
+    #:
+    #: 与 `description` 的分工：description 说明「它能干什么」，这句说明
+    #: 「**何时**该用、何时不要用」（模型的时机判断靠它）。消费方会把它写进
+    #: 系统提示的「工具/技能使用时机」一节，比藏在 schema 里显眼得多。
+    prompt_hint: str = ""
     #: **怎么把命令的产物发给用户** —— 由提供方插件决定（`async (payload, ctx)`）。
     #:
     #: 为什么不由调用方（ai_chat）发：命令的产物可能是 `MessageChain`、`list[chain]`、
@@ -113,8 +119,8 @@ class SkillRegistry:
     # ---- 注册 ----
 
     def register(self, plugin: str, name: str, *, command: str = "",
-                 description: str = "", cmds=None,
-                 deliver: Optional[Callable] = None) -> Skill:
+                 description: str = "", prompt_hint: str = "", when: str = "",
+                 cmds=None, deliver: Optional[Callable] = None) -> Skill:
         """把一个**已有命令**注册成技能（同名覆盖，按插件名可整批撤销）。
 
         Args:
@@ -150,7 +156,10 @@ class SkillRegistry:
                     f"技能 {full} 映射了别的插件的命令 {cmd}"
                     f"（它属于 {owner}，应由那个插件自己注册技能）")
         skill = Skill(name=full, command=cmd, plugin=plugin,
-                      description=str(description or ""), deliver=deliver)
+                      description=str(description or ""),
+                      # `when=` 是别名：两个名字都会有人写，语义相同
+                      prompt_hint=str(prompt_hint or when or "").strip(),
+                      deliver=deliver)
         self._skills[full] = skill
         if self.logger:
             self.logger.info("[skills] %s 注册技能 %s → %s",

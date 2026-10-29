@@ -85,7 +85,12 @@ class PluginTool:
         return _TOOL_NAME_RE.sub("_", self.name)
 
     def describe(self) -> str:
-        return self.description or f"{self.plugin} 提供的工具"
+        """给模型看的描述：**先判据，后功能**（模型靠判据选工具）。"""
+        hint = str(self.prompt_hint or "").strip()
+        desc = str(self.description or "").strip()
+        if hint and desc:
+            return f"{hint}｜{desc}"
+        return hint or desc or f"{self.plugin} 提供的工具"
 
 
 class ToolRegistry:
@@ -99,7 +104,8 @@ class ToolRegistry:
     def register(self, plugin: str, name: str, handler: Callable, *,
                  description: str = "", parameters: Optional[dict] = None,
                  permission: str = "", scope: str = "all",
-                 max_chars: int = 4000, prompt_hint: str = "") -> PluginTool:
+                 max_chars: int = 4000, prompt_hint: str = "",
+                 when: str = "") -> PluginTool:
         raw = str(name or "").strip()
         if not raw or not _NAME_RE.match(raw):
             raise ValueError(f"工具名不合法：{name!r}（字母数字、_ - .）")
@@ -118,7 +124,9 @@ class ToolRegistry:
                           parameters=params, permission=str(permission or ""),
                           scope=str(scope or "all").lower(),
                           max_chars=max(1, int(max_chars or 4000)),
-                          prompt_hint=str(prompt_hint or "").strip(),
+                          # `when=` 是 `prompt_hint=` 的别名（两个名字都有人用，
+                          # 语义就是一个：「什么时候该用我」）
+                          prompt_hint=str(prompt_hint or when or "").strip(),
                           accepts_ctx=_wants_ctx(handler))
         self._tools[full] = tool
         if self.logger:

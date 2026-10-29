@@ -62,6 +62,12 @@ Markdown 模式 3640 → **2011** 字（−45%），无工具 **676** 字。删�
 
 ## 12.2 渲染：自己写 Markdown 子集转换器
 
+> **2026-10-29 迁移**：`markdown.py` 已上提到框架 —— 实现现在在
+> `napcat/markdown.py`，`plugins/ai_chat/markdown.py` 只剩一层转发壳
+> （连私有名字一起转发，测试照旧可 `import`）。Chromium 那套基础设施同理，
+> 统一在 `napcat/render.py`，见[渲染](../../plugin-dev/19-render.md)。
+> 下文提到"`markdown.py`"时，指的是框架里那份。
+
 仓库里没有任何 Markdown 库，所以 `markdown.py` 实现了一个**受支持子集**
 （标题 / 粗斜体 / 行内与围栏代码 / 有序无序列表 / 引用 / 表格 / 分隔线 / 链接），
 未支持的语法原样显示，不报错也不吞内容。
