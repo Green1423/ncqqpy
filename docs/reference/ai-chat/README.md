@@ -3,7 +3,7 @@
 > 文档索引：[docs/README.md](../../README.md) · 上级：[参考文档](../README.md)
 
 这里记录 ai_chat 的**实现细节与开发约定**，面向改代码的人；使用说明见
-[ai_chat 手册](../../plugins/ai-chat/README.md)。
+[ai_chat 手册](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/README.md)。
 
 | 文档 | 内容 |
 |------|------|

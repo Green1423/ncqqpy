@@ -1,6 +1,6 @@
 # 十八、工具（给 AI 用，**结果回给模型**）
 
-> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[技能](17-skills.md) · 下一章：[渲染](19-render.md) · 相关：[ai_chat 的工具](../plugins/ai-chat/08-tools.md)
+> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[技能](17-skills.md) · 下一章：[渲染](19-render.md) · 相关：[ai_chat 的工具](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/08-tools.md)
 
 插件有两条路把自己的能力交给 AI。**先选对通道**，两者的语义完全不同：
 

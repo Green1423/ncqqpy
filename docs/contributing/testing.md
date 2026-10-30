@@ -14,13 +14,11 @@
 ./venv-arm/bin/python -B tests/test_unicode_names.py   # 非 ASCII 命令名
 ./venv-arm/bin/python -B tests/test_bool_short_flags.py
 ./venv-arm/bin/python -B tests/test_docs.py            # 文档链接/索引
-./venv-arm/bin/python -B tests/test_ai_chat.py
-./venv-arm/bin/python -B tests/test_bupt_news.py
-./venv-arm/bin/python -B tests/test_byrdocs.py
-./venv-arm/bin/python -B tests/test_essential.py
 ```
 
-完整清单与用途见 [tests/README.md](../../tests/README.md)。
+完整清单与用途见 [tests/README.md](../../tests/README.md)。插件验收套件在各自插件仓的
+`tests/` 下跑：[ai_chat](https://github.com/Green1423/ncqqpy-plugin-ai-chat) · [bupt_news](https://github.com/Green1423/ncqqpy-plugin-bupt-news) ·
+[byrdocs](https://github.com/Green1423/ncqqpy-plugin-byrdocs) · [oj_bank](https://github.com/Green1423/ncqqpy-oj-bank)。
 
 ## 文档检查
 

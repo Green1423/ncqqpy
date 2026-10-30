@@ -1,6 +1,6 @@
 # 十七、技能（把你的**命令**交给 AI 用）
 
-> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[错误处理与用户反馈](16-errors.md) · 下一章：[工具](18-tools.md) · 相关：[命令](04-commands.md) · [ai_chat 的工具](../plugins/ai-chat/08-tools.md)
+> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[错误处理与用户反馈](16-errors.md) · 下一章：[工具](18-tools.md) · 相关：[命令](04-commands.md) · [ai_chat 的工具](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/08-tools.md)
 
 **命令给「人」敲，技能让 AI 也能触发同一条命令。** 技能不是另写一套 handler ——
 它只是**一行命令映射**：

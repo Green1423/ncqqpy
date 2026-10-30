@@ -78,15 +78,15 @@
 
 ## 6. 验证
 
-改动涉及的套件（全部应从仓库根跑）：
+改动涉及的框架仓套件（从仓库根跑）：
 
 ```bash
 ./venv-arm/bin/python -B tests/test_scope.py          # 服务范围口径
 ./venv-arm/bin/python -B tests/test_persist.py        # JSON 原子写 / 目录清理
 ./venv-arm/bin/python -B tests/test_plugin_errors.py  # 生命周期缺陷回归
 ./venv-arm/bin/python -B tests/test_plugin_deps.py    # 依赖图与加载顺序
-./venv-arm/bin/python -B tests/test_byrdocs.py        # 四个插件的准入行为
-./venv-arm/bin/python -B tests/test_bupt_news.py
-./venv-arm/bin/python -B tests/test_oj_bank.py
-./venv-arm/bin/python -B tests/test_ai_chat.py
 ```
+
+插件侧验收在各自插件仓的 `tests/` 下跑：[ai_chat](https://github.com/Green1423/ncqqpy-plugin-ai-chat)、
+[bupt_news](https://github.com/Green1423/ncqqpy-plugin-bupt-news)、[byrdocs](https://github.com/Green1423/ncqqpy-plugin-byrdocs)、
+[oj_bank](https://github.com/Green1423/ncqqpy-oj-bank)。

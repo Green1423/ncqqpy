@@ -1,7 +1,8 @@
 # ncqqpy 文档
 
-本目录是 ncqqpy 的**全部说明文档**，按职责分成六个区：用框架、写插件、内置插件手册、
-参考、归档、贡献规范。每篇文档开头都有「上级 / 上一章 / 下一章」导航。
+本目录是 ncqqpy 的**框架与插件开发文档**，按职责分成六个区：用框架、写插件、内置插件索引、
+参考、归档、贡献规范。各插件的完整手册在各自插件仓（见下文「内置插件」）。
+每篇文档开头都有「上级 / 上一章 / 下一章」导航。
 
 > 文档中的 QQ、群号、编号、密钥均为**虚构示例**，请替换成自己的数据。
 
@@ -10,7 +11,7 @@ docs/
 ├── README.md              # 本页：总索引与阅读路径
 ├── guide/                 # 用框架：配置 → 消息 → 事件 → API → 命令 → 权限 …
 ├── plugin-dev/            # 写插件：生命周期 → 资源 → 命令/Schema → 存储 → 错误 …
-├── plugins/               # 内置插件手册：ai_chat / bupt_news / byrdocs / oj_bank
+├── plugins/               # 内置插件索引（完整手册在各插件仓）
 ├── reference/             # 参考：sqlite ORM、看门狗、DSH 内部机制
 ├── archive/               # 历史设计/实施计划（只读，不再维护）
 └── contributing/          # 贡献规范：docstring / 测试与发布
@@ -25,7 +26,7 @@ docs/
 | 写命令、帮助、权限 | [命令系统](guide/06-commands.md) → [权限管理](guide/07-permissions.md) |
 | 写插件 | [插件开发](plugin-dev/README.md)（先看 [插件概述](plugin-dev/01-overview.md)） |
 | 存结构化数据 | [数据持久化](plugin-dev/09-store.md) + [store 参考](reference/store.md) |
-| 用内置插件 | [ai_chat](plugins/ai-chat/README.md) · [bupt_news](plugins/bupt-news/README.md) · [byrdocs](plugins/byrdocs/README.md) |
+| 用内置插件 | [ai_chat](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/README.md) · [bupt_news](https://github.com/Green1423/ncqqpy-plugin-bupt-news/blob/main/docs/bupt-news/README.md) · [byrdocs](https://github.com/Green1423/ncqqpy-plugin-byrdocs/blob/main/docs/byrdocs/README.md) |
 | 运维（断线重启） | [看门狗](reference/watchdog/README.md) |
 | 改框架本身 | [docstring 规范](contributing/docstrings.md) + [DSH 内部机制](reference/dsh-internals/README.md) |
 
@@ -85,10 +86,10 @@ docs/
 
 | 插件 | 一句话 | 文档 |
 |------|--------|------|
-| `ai_chat` | 多会话 AI 对话、消息包装、上下文压缩、内置工具 | [手册](plugins/ai-chat/README.md) |
-| `bupt_news` | 北邮校内通知同步、免打扰早报、短 ID 检索、DeepSeek 摘要 | [手册](plugins/bupt-news/README.md) |
-| `byrdocs` | BYR Docs 资料检索与下载（搜索编号 / 翻页 / 取文件 / 白名单） | [手册](plugins/byrdocs/README.md) |
-| `oj_bank` | 本地题库与判题：洛谷抓题 / AI 搜题入库 / 出图 / 10 组卡人测试点 / 题组 | [手册](plugins/oj-bank/README.md) |
+| `ai_chat` | 多会话 AI 对话、消息包装、上下文压缩、内置工具 | [手册](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/README.md) |
+| `bupt_news` | 北邮校内通知同步、免打扰早报、短 ID 检索、DeepSeek 摘要 | [手册](https://github.com/Green1423/ncqqpy-plugin-bupt-news/blob/main/docs/bupt-news/README.md) |
+| `byrdocs` | BYR Docs 资料检索与下载（搜索编号 / 翻页 / 取文件 / 白名单） | [手册](https://github.com/Green1423/ncqqpy-plugin-byrdocs/blob/main/docs/byrdocs/README.md) |
+| `oj_bank` | 本地题库与判题：洛谷抓题 / AI 搜题入库 / 出图 / 10 组卡人测试点 / 题组 | [手册](https://github.com/Green1423/ncqqpy-oj-bank/blob/main/docs/oj-bank/README.md) |
 | `plugin_manager` | 超管私聊装卸插件（GitHub 安装、回收站、校验） | [README](../plugins/plugin_manager/README.md) |
 | `essential` | 群管理（`/ban` `/kick` `/groupinfo`）+ 问候 + 定时撤回 | 示例章节见 [插件开发](plugin-dev/README.md) |
 
