@@ -10,7 +10,7 @@ docs/
 ├── README.md              # 本页：总索引与阅读路径
 ├── guide/                 # 用框架：配置 → 消息 → 事件 → API → 命令 → 权限 …
 ├── plugin-dev/            # 写插件：生命周期 → 资源 → 命令/Schema → 存储 → 错误 …
-├── plugins/               # 内置插件手册：ai_chat / bupt_news / byrdocs
+├── plugins/               # 内置插件手册：ai_chat / bupt_news / byrdocs / oj_bank
 ├── reference/             # 参考：sqlite ORM、看门狗、DSH 内部机制
 ├── archive/               # 历史设计/实施计划（只读，不再维护）
 └── contributing/          # 贡献规范：docstring / 测试与发布
@@ -75,6 +75,9 @@ docs/
 | [插件包结构](plugin-dev/14-layout.md) | 14.1 `__init__.py` 只装配 · 14.2 逻辑拆分 · 14.3 声明式注册 |
 | [配置管理](plugin-dev/15-config.md) | 15.1 首次生成 · 15.2 读写 · 15.3 契约测试 |
 | [错误处理](plugin-dev/16-errors.md) | 16.1 错误类型 · 16.2 速查 · 16.3 用户反馈 |
+| [技能（把能力交给 AI 用）](plugin-dev/17-skills.md) | 17.1 注册 · 17.2 三条硬约束 · 17.3 调用上下文 · 17.4 生命周期 · 17.5 消费方 · 17.6 调试 |
+| [工具（结果回给模型）](plugin-dev/18-tools.md) | 18.1 注册 · 18.2 权限与作用域 · 18.3 生命周期 · 18.4 调试 · 18.5 拿到调用者 · 18.6 prompt_hint |
+| [渲染：Markdown 与 HTML 出图](plugin-dev/19-render.md) | 19.1 `napcat.markdown` · 19.2 `napcat.render`（Chromium） · 19.3 什么时候用 · 19.4 常见坑 |
 
 ## 三、内置插件（`plugins/`）
 

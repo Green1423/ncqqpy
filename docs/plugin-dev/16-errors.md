@@ -1,6 +1,6 @@
 # 十六、错误处理与用户反馈
 
-> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[配置管理](15-config.md)
+> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[配置管理](15-config.md) · 下一章：[技能](17-skills.md)
 
 
 **一句话**：插件**抛什么异常**决定用户看到什么、谁收到；**怎么发**由框架统一负责，

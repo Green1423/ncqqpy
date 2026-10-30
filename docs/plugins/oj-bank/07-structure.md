@@ -1,6 +1,6 @@
 # 七、代码结构与测试
 
-> 上级：[oj_bank](README.md) · 上一章：[出图](06-render.md)
+> 上级：[oj_bank](README.md) · 上一章：[出图](06-render.md) · 下一章：[测试点从哪来（AI 生成）](08-testcases.md)
 
 ## 7.1 模块职责
 

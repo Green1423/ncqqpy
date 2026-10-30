@@ -1,6 +1,6 @@
 # 十九、渲染：Markdown 与 HTML 出图
 
-> 上级：[插件开发](README.md) · 相关：[消息](08-messages.md)
+> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[工具](18-tools.md) · 相关：[消息](08-messages.md)
 
 QQ 不渲染 Markdown，也不会把 HTML 表格排好。想在聊天里给出**有排版**的内容
 （公式、表格、代码块、题卡），只有一条路：**在服务端把 HTML 渲染成图片再发**。
