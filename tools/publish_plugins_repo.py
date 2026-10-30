@@ -39,6 +39,9 @@ PLUGINS: tuple[tuple[str, str, str, str, tuple[str, ...], bool], ...] = (
     ("ai_chat", "Green1423/ncqqpy-plugin-ai-chat", "main",
      "多会话 AI 对话（上下文压缩 + 内置工具 + 联网搜索 + Markdown 出图）",
      ("AI",), True),
+    ("oj_bank", "Green1423/ncqqpy-oj-bank", "main",
+     "本地题库与判题（洛谷抓题 / AI 搜题入库 / 题卡出图 / 10 组测试点 / 题组）",
+     ("题库", "判题"), True),
 )
 
 README = """# ncqqpy-plugins

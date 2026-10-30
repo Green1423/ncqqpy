@@ -34,7 +34,7 @@
 ## 发布
 
 ```bash
-# 生成 dist/ 六个仓库（框架 + 4 插件 + 插件索引）
+# 生成 dist/ 七个仓库（框架 + 5 插件 + 插件索引）
 ./venv-arm/bin/python -B tests/build_repos.py --check
 
 # 提交并推送（SSH；脚本自带 ssh -F /dev/null 兜底）

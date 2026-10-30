@@ -1,6 +1,6 @@
 # oj_bank 插件：本地题库与判题
 
-> 上级：[插件文档](../README.md) · 插件目录：[plugins/oj_bank](https://github.com/Green1423/ncqqpy-plugin-oj_bank)
+> 上级：[插件文档](../README.md) · 插件目录：[plugins/oj_bank](https://github.com/Green1423/ncqqpy-oj-bank)
 > 配置段：`config.json` → `plugins.oj_bank`
 > 自检：`venv-arm/bin/python -B tests/test_oj_bank.py`
 
