@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py test_unicode_names.py test_bool_short_flags.py test_docs.py test_docstrings.py test_watchdog_online.py test_api_coverage.py test_file_stream.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py test_unicode_names.py test_bool_short_flags.py test_docs.py test_docstrings.py test_watchdog_online.py test_api_coverage.py test_file_stream.py test_multiline.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -31,6 +31,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_watchdog_online.py` | 看门狗：启动已在线跳过 / 掉线观察期 / 健康检查降噪 |
 | `test_api_coverage.py` | API 覆盖：官方 178 个 action / 字段名回归 |
 | `test_file_stream.py` | 流式文件：分块上传 / 流式下载 / FileManager / 多包路由 |
+| `test_multiline.py` | 多行字符串（"""…""" 原始内容 / 错误提示 / Schema 端到端） |
 
 ## 依赖插件的用例会自动跳过
 

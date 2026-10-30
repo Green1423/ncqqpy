@@ -27,7 +27,7 @@ PNG（<data_dir>/renders/）
 | 题目描述 | `statement` |
 | 输入格式 / 输出格式 | `input_format` / `output_format` |
 | 输入样例 / 输出样例 | `sample_input` / `sample_output`（等宽、保留空白） |
-| 注意事项 | `note`（数据范围、提示） |
+| 注意事项 | `note`（**只剩数据范围**：提示/题解/广告/样例代码在入库时就被过滤掉了） |
 | 页脚 | 生成时间 |
 
 空字段整段省略 —— 没有注意事项就不会出现一个空标题。

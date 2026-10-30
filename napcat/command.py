@@ -668,6 +668,45 @@ class CommandParser:
         got = self.strip_prefix(text)
         return got[1].strip() if got else None
 
+    #: 多行字符串占位符的边界（私用区字符，正常输入不会出现）
+    _ML_OPEN = "\ue000"
+    _ML_CLOSE = "\ue001"
+
+    def _extract_multiline(self, text: str):
+        """把三引号块抠成占位符，返回 (文本, 块列表, 错误)。
+
+        支持 `\"\"\"…\"\"\"` 与三个单引号；内容是**原样**的：
+        不解析 `\\n` / `\\t` 等转义，反斜杠、引号、换行都保留。
+        块必须单独作为一个参数（前后是空白或首尾）。
+        """
+        blocks: list[str] = []
+        out: list[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            delim = None
+            if text.startswith('"""', i):
+                delim = '"""'
+            elif text.startswith("\'\'\'", i):
+                delim = "\'\'\'"
+            if delim is None:
+                out.append(text[i])
+                i += 1
+                continue
+            if i > 0 and not text[i - 1].isspace():
+                return text, blocks, "多行字符串必须单独作为一个参数（前面要有空格/换行）"
+            j = text.find(delim, i + 3)
+            if j < 0:
+                return text, blocks, f"多行字符串没有闭合（需要 {delim} 结束）"
+            after = j + 3
+            if after < n and not text[after].isspace():
+                return text, blocks, "多行字符串必须单独作为一个参数（后面要有空格/换行）"
+            content = text[i + 3:j].replace("\r\n", "\n").replace("\r", "\n")
+            out.append(f"{self._ML_OPEN}{len(blocks)}{self._ML_CLOSE}")
+            blocks.append(content)
+            i = after
+        return "".join(out), blocks, ""
+
     def parse(self, text: str) -> Optional[CommandPacket]:
         text = self.normalize(text)
         if not text:
@@ -684,6 +723,12 @@ class CommandParser:
             return None
         prefix, text = got
         text = text.strip()
+        raw_text = text          # 报错/`packet.raw` 用原文，不要露出占位符
+        # 先抠出多行字符串（原样内容，不参与后续的引号/转义处理）
+        text, blocks, ml_error = self._extract_multiline(text)
+        if ml_error:
+            return CommandPacket(raw=text, prefix=prefix, command="", illegal=True,
+                                 illegal_kind="parse", illegal_reason=ml_error)
         try:
             parts = shlex.split(text)
         except ValueError:
@@ -692,18 +737,18 @@ class CommandParser:
         # 先还原受保护的 \' ，再统一处理 \n \t \\ \" \' 等转义序列
         parts = [self._unescape(p.replace(self._SQ_MARK, "'")) for p in parts]
         if not parts:
-            return CommandPacket(raw=text, prefix=prefix, command="", illegal=True,
+            return CommandPacket(raw=raw_text, prefix=prefix, command="", illegal=True,
                                  illegal_kind="empty", illegal_reason="解析失败")
         command = parts[0].lower()
         if len(command) > self.max_cmd_len:
-            return CommandPacket(raw=text, prefix=prefix, command=command, illegal=True,
+            return CommandPacket(raw=raw_text, prefix=prefix, command=command, illegal=True,
                                  illegal_kind="too_long",
                                  illegal_reason=f"命令名过长（>{self.max_cmd_len}）")
         if not self._NAME_PATTERN.fullmatch(command):
             # 前缀后跟着的是分隔符而不是命令名（典型：`// `）→ 不是命令。
             # 让它落到 `illegal` 分支静默丢弃，而不是回一句
             # `未知命令: //`（用户只是想发个结束符，不该被指责打错命令）。
-            return CommandPacket(raw=text, prefix=prefix, command=command,
+            return CommandPacket(raw=raw_text, prefix=prefix, command=command,
                                  illegal=True, illegal_kind="name",
                                  illegal_reason="命令名不是合法标识符")
         subcommand = None
@@ -723,12 +768,26 @@ class CommandParser:
                 kwargs[part[1:]] = "true"
             else:
                 args.append(part)
+
+        if blocks:
+            def _restore(value: str) -> str:
+                if (value.startswith(self._ML_OPEN)
+                        and value.endswith(self._ML_CLOSE)):
+                    raw = value[len(self._ML_OPEN):-len(self._ML_CLOSE)]
+                    if raw.isdigit() and int(raw) < len(blocks):
+                        return blocks[int(raw)]
+                return value
+
+            args = [_restore(a) for a in args]
+            kwargs = {k: _restore(v) for k, v in kwargs.items()}
+
         if len(args) > self.max_args:
-            return CommandPacket(raw=text, prefix=prefix, command=command, subcommand=subcommand,
+            return CommandPacket(raw=raw_text, prefix=prefix, command=command,
+                                 subcommand=subcommand,
                                  args=args, kwargs=kwargs, illegal=True,
                                  illegal_kind="too_many_args",
                                  illegal_reason=f"参数过多（>{self.max_args}）")
-        return CommandPacket(raw=text, prefix=prefix, command=command,
+        return CommandPacket(raw=raw_text, prefix=prefix, command=command,
                              subcommand=subcommand, args=args, kwargs=kwargs)
 
 
@@ -2703,6 +2762,11 @@ class CommandManager:
             if packet.illegal_kind == "too_many_args":
                 return (f"⚠️ 参数过多：最多支持 {self.parser.max_args} 个位置参数"
                         f"（收到 {len(packet.args)} 个）。发 /help <命令> 看用法。")
+            if packet.illegal_kind == "parse" and "多行字符串" in packet.illegal_reason:
+                # 多行字符串写错是「真的在打命令」，不能静默；给回显式提示。
+                return (f"⚠️ 用法不正确：{packet.illegal_reason}\n"
+                        "多行字符串用 \"\"\"…\"\"\" 或 '''…''' 包起来，"
+                        "并单独占一个参数（前后留空格/换行）。")
             return None
 
         handler = self._commands.get(packet.command)

@@ -45,13 +45,16 @@
   "gen": {
     "enabled": true,
     "auto_insert": true,
-    "retry_missing": 1,
+    "pitfalls": true,
+    "allow_scripts": true,
+    "script_timeout": 15,
+    "retry_missing": 3,
     "backfill_on_start": true,
     "backfill_limit": 5,
     "count": 10,
-    "max_seconds": 600,
-    "timeout": 180,
-    "max_tokens": 16384,
+    "max_seconds": 3600,
+    "timeout": 600,
+    "max_tokens": 65536,
     "max_statement_chars": 6000,
     "max_input_chars": 20000,
     "base_url": "",
@@ -64,8 +67,8 @@
     "base_url": "",
     "model": "",
     "api_key": "",
-    "timeout": 60,
-    "max_tokens": 900,
+    "timeout": 300,
+    "max_tokens": 32768,
     "max_code_chars": 12000,
     "max_chars": 700,
     "reasoning_effort": ""
@@ -140,13 +143,16 @@
 |----|------|
 | `enabled` | 开关（默认开；没配模型时自动跳过） |
 | `auto_insert` | 所有入库的题**自动**生成 10 组（默认开） |
-| `retry_missing` | 不够 10 组时再补几轮（默认 1） |
+| `retry_missing` | 不够 10 组时再补几轮（默认 3） |
+| `pitfalls` | 生成前先问「本题常见误区」，再针对误区出卡点（默认开） |
+| `allow_scripts` | 允许模型用 Python 脚本生成测试数据（默认开，沙箱执行） |
+| `script_timeout` | 生成脚本超时（秒，默认 15） |
 | `backfill_on_start` | 启动时补「还没有测试点」的旧题（默认开） |
 | `backfill_limit` | 一次最多补几道（默认 5） |
 | `count` | 默认出几组（1..10） |
-| `max_seconds` | 整次生成的总时间预算（秒，默认 600）；超了就用已有结果收工 |
-| `timeout` | 整次生成超时（秒） |
-| `max_tokens` | 单次请求的输出上限（默认 16384；一组数据很小，这个值主要是留余量） |
+| `max_seconds` | 整次生成的总时间预算（秒，默认 3600）；超了就用已有结果收工 |
+| `timeout` | 单次请求超时（秒，默认 600） |
+| `max_tokens` | 单次请求的输出上限（默认 65536；思考模型的思考过程也算在里面） |
 | `max_statement_chars` | 题面送审的截断长度 |
 | `max_input_chars` | 单组输入的长度上限 |
 | `base_url` / `model` / `api_key` | 留空借用 `plugins.ai_chat.llm`；也可用 `OJ_GEN_API_KEY` |

@@ -139,6 +139,14 @@ NapCat 的 `download_file_stream`，路径 / URL / FileNapCat UUID 都认）；
   并清掉 Markdown（QQ 不渲染）；
 - 同一时刻只跑一条点评（内部串行），不会把判题机压住。
 
+**什么时候点评**：每次判完分（AC/WA/TLE…）自动排一条后台点评，首条是分数、第二条是点评；
+状态 `BLOCKED`/`IE`（代码没跑起来）不点评。想补一次用 `/oj coach <提交编号>`。
+点评失败（超时、空回复、HTTP 错）会**在聊天里说一句原因**，不再静默；
+网关掐断长连接（`ServerDisconnectedError`）会**换连接自动重试一次**。
+插件热重载会取消正在跑的点评/生成任务，日志里会写「被取消（插件卸载/重载）」。
+qwen 是思考模型：`coach.max_tokens` 默认 **32768**、`coach.timeout` 默认 **300 秒**，
+一段复杂代码实测约 2 分钟出点评（后台任务，不影响分数）。
+
 点评用哪个模型：`coach.base_url/model/api_key` **留空时借用 `plugins.ai_chat.llm`**
 （同一个网关、同一把 key，不用配两遍）；想换模型或关掉就单独写
 `coach.enabled=false` / 覆盖那三项。
