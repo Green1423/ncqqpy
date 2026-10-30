@@ -78,6 +78,8 @@ docs/
 | [技能（把能力交给 AI 用）](plugin-dev/17-skills.md) | 17.1 注册 · 17.2 三条硬约束 · 17.3 调用上下文 · 17.4 生命周期 · 17.5 消费方 · 17.6 调试 |
 | [工具（结果回给模型）](plugin-dev/18-tools.md) | 18.1 注册 · 18.2 权限与作用域 · 18.3 生命周期 · 18.4 调试 · 18.5 拿到调用者 · 18.6 prompt_hint |
 | [渲染：Markdown 与 HTML 出图](plugin-dev/19-render.md) | 19.1 `napcat.markdown` · 19.2 `napcat.render`（Chromium） · 19.3 什么时候用 · 19.4 常见坑 |
+| [服务范围](plugin-dev/20-scope.md) | 20.1 四条规矩 · 20.2 接进插件 · 20.3 判定 API · 20.4 三种上下文 · 20.5 按会话例外 · 20.6 名单维护 |
+| [本地状态与清理](plugin-dev/21-persist.md) | 21.1 JSON 状态 · 21.2 按数量清理 · 21.3 按引用清理 · 21.4 怎么选 · 21.5 与 sqlite 的边界 |
 
 ## 三、内置插件（`plugins/`）
 
@@ -99,6 +101,7 @@ docs/
 | [看门狗](reference/watchdog/README.md) | 断线自动重启 + 扫码恢复的唯一状态机、配置与排障 |
 | [DSH 内部机制](reference/dsh-internals/README.md) | DSH 的消息投影、会话日志、系统提示与上下文压缩（`ai_chat` 的语义依据） |
 | [ai_chat 实现参考](reference/ai-chat/README.md) | Markdown 渲染、持久化、测试、import 纪律、框架改动、DSH 映射 |
+| [框架变更记录](reference/framework-changes.md) | 插件系统 / 本地状态 / 服务范围的对外变更、影响与升级检查清单 |
 
 ## 五、归档（`archive/`）
 

@@ -32,6 +32,12 @@
     # sqlite ORM
     from napcat.store import Database, Model, CharField
 
+    # 服务范围白名单（群 / 用户；四个内置插件共用同一口径）
+    from napcat.scope import Scope, parse_ids
+
+    # 本地 JSON 状态（原子写）与目录清理
+    from napcat.persist import read_json, write_json, prune_keep
+
     # 配置 / 文件 / 服务端拉起 / 看门狗
     from napcat.config import ConfigManager
     from napcat.file_manager import FileManager
