@@ -416,11 +416,12 @@ def plan_update(new_files: dict[str, str], old_files: dict[str, str],
 def sniff_plugin_identity(root: Path) -> tuple[str, str]:
     """从插件源码里读出 `name` / `version`（校验「装的是不是这个插件」）。
 
-    只看 `__init__.py`、`main.py`，最多扫 64KB —— 插件入口就在这两个文件里，
-    全目录正则扫描既慢又容易被示例代码里的 `name = "xxx"` 骗到。
+    只看入口文件 `__init__.py` / `main.py` / `plugin.py`，最多扫 64KB ——
+    插件入口就在这几个文件里，全目录正则扫描既慢又容易被示例代码里的
+    `name = "xxx"` 骗到。
     """
     name = version = ""
-    for rel in ("__init__.py", "main.py"):
+    for rel in ("__init__.py", "main.py", "plugin.py"):
         path = root / rel
         if not path.is_file():
             continue

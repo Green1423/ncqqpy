@@ -37,6 +37,7 @@ cp config.example.json config.json     # 填 ws_url / token / superusers
 | [`byrdocs`](https://github.com/Green1423/ncqqpy-plugin-byrdocs) | 检索 byrdocs.org 资料库、按编号翻页取详情、下载文件到群，带服务范围白名单。 |
 | [`essential`](https://github.com/Green1423/ncqqpy-plugin-essential) | 禁言/踢人/解禁/群信息等群管理命令，以及按群配置的入群欢迎语（含定时撤回）。 |
 | [`oj_bank`](https://github.com/Green1423/ncqqpy-oj-bank) | 在 QQ 里维护本地题库：洛谷抓题 / AI 搜题入库、题卡出图、10 组测试点判题，以及题组与榜单。 |
+| [`todo`](https://github.com/Green1423/ncqqpy-plugin-todo) | 待办与周期提醒：自然语言时间表达式、重复规则、服务范围白名单、重启不丢提醒。 |
 | **plugin_manager**（自带） | 插件管理器：私聊里 `/plugin install/update/uninstall`，也可 `/plugin upload` 直接上传 zip（自动装 `requirements.txt`）；列表文件在 [ncqqpy-plugins](https://github.com/Green1423/ncqqpy-plugins) |
 
 插件是**独立的仓库**：clone 到本仓库的 `plugins/` 下即被加载（也可以放到别处再

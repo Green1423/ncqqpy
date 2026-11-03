@@ -42,6 +42,9 @@ PLUGINS: tuple[tuple[str, str, str, str, tuple[str, ...], bool], ...] = (
     ("oj_bank", "Green1423/ncqqpy-oj-bank", "main",
      "本地题库与判题（洛谷抓题 / AI 搜题入库 / 题卡出图 / 10 组测试点 / 题组）",
      ("题库", "判题"), True),
+    ("todo", "Green1423/ncqqpy-plugin-todo", "main",
+     "待办与周期提醒（自然语言时间表达式 / 重复规则 / 服务范围白名单）",
+     ("待办", "提醒"), True),
 )
 
 README = """# ncqqpy-plugins
@@ -121,14 +124,17 @@ MIT
 def build(out: Path, *, updated: str) -> dict:
     entries = []
     for name, repo, ref, description, tags, keep_data in PLUGINS:
-        local = ROOT / "plugins" / name / "main.py"
         version = ""
-        if local.is_file():
+        for fname in ("__init__.py", "main.py", "plugin.py"):
+            local = ROOT / "plugins" / name / fname
+            if not local.is_file():
+                continue
             # 与 installer.sniff_plugin_identity 同一条规则：类属性缩进也在内
             found = re.search(r"^\s*version\s*[:=]\s*['\"]([^'\"]+)['\"]",
                               local.read_text(encoding="utf-8"), re.M)
             if found:
                 version = found.group(1)
+                break
         entries.append({
             "name": name,
             "repo": repo,
@@ -138,6 +144,17 @@ def build(out: Path, *, updated: str) -> dict:
             "tags": list(tags),
             "data": keep_data,
         })
+    # 保留现有列表里的社区条目（PR 加的、不在本地 PLUGINS 里），避免重新生成时误删
+    existing = out / "plugins.json"
+    if existing.is_file():
+        try:
+            old = json.loads(existing.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            old = {}
+        known = {e["name"] for e in entries}
+        for entry in old.get("plugins") or []:
+            if isinstance(entry, dict) and entry.get("name") not in known:
+                entries.append(entry)
     manifest = {"version": 1, "name": "ncqqpy 官方插件列表",
                 "updated": updated, "plugins": entries}
 
