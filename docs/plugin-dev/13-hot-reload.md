@@ -39,6 +39,8 @@
 /plugin install <插件名>       安装（下载 → 校验 → 原子替换 → 热重载）
 /plugin update all            全部更新（本地没动过的文件才覆盖）
 /plugin uninstall <插件名>     卸载（进 plugins/.trash/，可找回）
+/plugin upload [--force=true]  上传 zip 安装（包检查 + requirements 自动安装）
+/plugin cancel                 取消「等 zip」的等待
 ```
 
 对自己的插件而言，这意味着三件事：
@@ -51,6 +53,19 @@
    仓库文件比对）；
 3. **别改仓库里的文件当配置**：手改过的文件会让更新停下来要 `--force=true`。
    要留自己的改动就新增文件（新文件不在同步范围内，永不删除）。
+
+**上传 zip 安装**（`/plugin upload`，交互照 `/oj submit`）：从 QQ 私聊收 zip，
+**先同步校验包**（合法 zip、无路径穿越/符号链接、解压上限、包根有 `__init__.py`
+或 `main.py`），格式错误当场回 `❌`；通过后才按「冲突检查 → 原子替换 → 记账 →
+热重载」流程安装（后台回执）。不带附件时进入等待窗口，窗口里校验失败可以
+**直接重发 zip**（命令不用重发），`/plugin cancel` 取消。
+
+打包方式：zip 里**只能有一个顶层文件夹**，**文件夹名就是插件名**（根目录直接放文件、
+或第二个顶层文件夹都会被拒绝）；文件夹里放 `__init__.py`、其他 `.py`、`README.md`。
+**上传包按原样安装**（README/文档不会被过滤）。包根下的 `requirements.txt`
+会在替换**之前**用当前解释器的 pip 安装，失败则放弃本次替换（旧版本可用）；
+文件里只允许「包规格」行（`-r` / `-e` / 私有源参数不行，那些走
+`config.json` 的 `requirements.pip_args`）。
 
 命令与机制详见 (../../plugins/plugin_manager/README.md)；
 列表文件的生成脚本是 (../../tools/publish_plugins_repo.py)。

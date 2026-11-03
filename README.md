@@ -37,7 +37,7 @@ cp config.example.json config.json     # 填 ws_url / token / superusers
 | [`byrdocs`](https://github.com/Green1423/ncqqpy-plugin-byrdocs) | 检索 byrdocs.org 资料库、按编号翻页取详情、下载文件到群，带服务范围白名单。 |
 | [`essential`](https://github.com/Green1423/ncqqpy-plugin-essential) | 禁言/踢人/解禁/群信息等群管理命令，以及按群配置的入群欢迎语（含定时撤回）。 |
 | [`oj_bank`](https://github.com/Green1423/ncqqpy-oj-bank) | 在 QQ 里维护本地题库：洛谷抓题 / AI 搜题入库、题卡出图、10 组测试点判题，以及题组与榜单。 |
-| **plugin_manager**（自带） | 基于 GitHub 的插件管理器：私聊里 `/plugin install/update/uninstall`，列表文件在 [ncqqpy-plugins](https://github.com/Green1423/ncqqpy-plugins) |
+| **plugin_manager**（自带） | 插件管理器：私聊里 `/plugin install/update/uninstall`，也可 `/plugin upload` 直接上传 zip（自动装 `requirements.txt`）；列表文件在 [ncqqpy-plugins](https://github.com/Green1423/ncqqpy-plugins) |
 
 插件是**独立的仓库**：clone 到本仓库的 `plugins/` 下即被加载（也可以放到别处再
 `ln -s` 进来）。`plugin_manager` 随框架自带，可以直接用它在 QQ 私聊里装卸上面这些插件
@@ -55,10 +55,12 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 
 | 命令 | 作用 |
 |------|------|
-| `/plugins` | 查看已加载插件（任何人可用）|
+| `/plugin list` | 插件总览：已装/已加载 + 可安装（`/plugins` 为等价的旧别名）|
 | `/plugin list/info/check` | 查看可装插件、来源与更新 |
 | `/plugin install/update/uninstall` | 从 GitHub 安装 / 更新 / 卸载插件 |
 | `/plugin add <仓库>` | 装列表文件里没有的仓库 |
+| `/plugin upload` | 上传 zip 安装（单文件夹包、同步包检查、requirements 自动安装） |
+| `/plugin cancel` | 取消「等 zip」的等待 |
 | `/plugin trash` | 查看/清理更新与卸载留下的备份 |
 | `/reload [插件名]` | 热重载全部/指定插件 |
 | `/commands` `/events` `/timers` | 查看已注册的命令/监听器/定时任务 |

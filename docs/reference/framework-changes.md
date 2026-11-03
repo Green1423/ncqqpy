@@ -38,6 +38,8 @@
 | `PluginBase.cancel_schedule(name)` 与 `stop_timer` 同义 | 两个名字一个实现，返回值也一致 | 无 |
 | `pause_timer` / `resume_timer` 去掉 `hasattr` 兜底 | `TimerManager` 一定有这两个方法，防御分支不会命中 | 无 |
 | 加载失败 / 启用失败 / 卸载共用同一套拆卸 | 三条路径都会撤销该插件注册的**命令、技能、工具、事件处理器、定时任务与连接回调**；失败后不再留残留 | 无（插件里不必再自己写清理） |
+| 内置 `/plugins` 命令移除，并入 `plugin_manager` 的 `/plugin list` | `/plugins` 改为 `plugin_manager` 注册的**等价别名**（同一渲染器、`superuser + private`）；框架不再提供「任何人可用」的插件列表 | 需要普通用户看插件列表的场景没有了；受限用户请改用服务范围内的功能 |
+| `plugin_manager` 的 `/plugin list` 合并原 `/plugins` | 一次列出「已安装（✓/✗/⛔ + 版本 + 依赖 + 来源）」与「可安装」；`/plugins` 输出与它完全一致 | 无（脚本里解析输出的话注意分段标题变了） |
 | 热重载只清理一次模块子树 | 语义不变（`reload()` 不再重复摘 `sys.modules`） | 无 |
 | 技能表与工具表共用 `NamedRegistry` | `list(exclude=...)` 统一为 `exclude: str = ""`（空串 = 不过滤）；技能同名覆盖、工具同名拒绝的语义**保持不变** | 只用公开方法则无影响 |
 | `plugin_manager`：插件根目录改名 `plugins_root` | 基类 `plugin_dir` 恢复「插件自己的目录」语义（`plugins/<名>/`） | 只有读过该插件内部属性的人需要改 |

@@ -1921,51 +1921,6 @@ class CommandManager:
                 self._cfg_ref.set("bound_groups", list(gr._bound))
             return f"群 {gid} {'已解绑' if ok else '解绑失败（可能未绑定）'}"
 
-        def _cmd_plugins(packet=None):
-            pm = self._plugins_ref
-            if pm is None:
-                return "插件管理器未初始化"
-            plist = pm.plugins
-            blocked = getattr(pm, "_dep_blocked", {}) or {}
-            if not plist and not blocked:
-                return "没有加载的插件"
-            lines = ["已加载插件:"]
-            # 依赖顺序展示：被依赖的排前面，一眼能看出谁在谁之上
-            try:
-                order = pm.load_order()
-            except Exception:  # noqa: BLE001 - 依赖声明成环时退回字典序
-                order = sorted(set(plist) | set(blocked))
-            rank = {name: i for i, name in enumerate(order)}
-            for name in sorted(set(plist) | set(blocked),
-                               key=lambda n: (rank.get(n, len(order)), n)):
-                pinst = plist.get(name)
-                if pinst is None:
-                    # 显示**实时**判定：依赖可能刚装上（缓存里的原因会显得自相矛盾）
-                    verdict = None
-                    try:
-                        verdict = pm.dependency_verdict(name)
-                    except Exception:  # noqa: BLE001
-                        verdict = None
-                    reason = (verdict.reason() if verdict and not verdict.ok
-                              else blocked.get(name, "")) or "依赖不满足"
-                    lines.append(f"  [⛔] {name} —— {reason}")
-                    continue
-                status = "✓" if pinst.enabled else "✗"
-                try:
-                    required, optional = pinst.dependency_names()
-                except Exception:  # noqa: BLE001
-                    required, optional = [], []
-                tags = ""
-                if required or optional:
-                    parts = []
-                    if required:
-                        parts.append("依赖 " + "、".join(required))
-                    if optional:
-                        parts.append("可选 " + "、".join(optional))
-                    tags = "（" + " · ".join(parts) + "）"
-                lines.append(f"  [{status}] {name} v{pinst.version}{tags}")
-            return "\n".join(lines)
-
         async def _cmd_reload(packet: CommandPacket):
             pm = self._plugins_ref
             if pm is None:
@@ -2528,10 +2483,11 @@ class CommandManager:
             ("move", _sub_alias_move, "把别名改指向另一条命令", _AliasMoveSchema),
         ])
 
-        # 所有人可见（查询/测试）
+        # 所有人可见（查询/测试）。`/plugins` **不在这里**：它已并入
+        # `plugin_manager` 的 `/plugin list`（同一渲染器、superuser + private），
+        # 框架不再知道「有哪些插件装好了」——那是插件管理器的数据。
         for cmd_name, func, desc in [
             ("ping", _cmd_ping, "延迟测试"),
-            ("plugins", _cmd_plugins, "查看已加载插件"),
         ]:
             self._install_handler(cmd_name, CommandHandler(
                 cmd_name, func, description=desc, scope="private",

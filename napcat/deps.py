@@ -234,7 +234,7 @@ def validate_declaration(owner: str, required: Iterable[Any],
 
 @dataclass
 class DependencyCheck:
-    """一份依赖声明的满足情况（加载期与 `/plugins` 共用同一份判定）。"""
+    """一份依赖声明的满足情况（加载期与 `/plugin list` 共用同一份判定）。"""
 
     owner: str
     missing: list[RequirementSpec] = field(default_factory=list)

@@ -1,7 +1,9 @@
 # plugin_manager —— 基于 GitHub 的插件管理器
 
-在 QQ 私聊里管理 ncqqpy 插件：**下载 / 更新 / 卸载**，全部基于 GitHub 仓库。
-插件列表文件放在 `Green1423/ncqqpy-plugins` 的 `plugins.json`。
+在 QQ 私聊里管理 ncqqpy 插件：**下载 / 上传 / 更新 / 卸载**。
+常规来源是 GitHub 仓库（插件列表文件放在 `Green1423/ncqqpy-plugins` 的
+`plugins.json`），也支持直接上传 zip 安装（自带包检查与 `requirements.txt`
+自动安装）。
 
 > 🔒 **仅私聊 · 仅超级用户**：所有子命令都声明 `permission="superuser"` +
 > `scope="private"`，群聊里连命令名都不出现（框架按「命令不存在」处理）。
@@ -17,6 +19,7 @@
     - [1.1 安装与更新有什么区别](#11-安装与更新有什么区别)
     - [1.2 `--force=true` 的语义](#12---forcetrue-的语义)
     - [1.3 依赖](#13-依赖)
+    - [1.4 上传 zip 安装（不经 GitHub）](#14-上传-zip-安装不经-github)
 2. [它是怎么工作的](#二它是怎么工作的)
     - [2.1 列表文件（唯一可信来源）](#21-列表文件唯一可信来源)
     - [2.2 下载：源码包而不是 `git clone`](#22-下载源码包而不是-git-clone)
@@ -34,18 +37,23 @@
 
 | 命令 | 作用 |
 |------|------|
-| `/plugin list [关键字] [installed]` | 列出列表文件里的插件与本地安装状态 |
+| `/plugin list [关键字] [installed]` | **插件总览**：已装/已加载（✓/✗/⛔ + 版本 + 依赖 + 来源）与可安装；`/plugins` 是它的等价旧别名 |
 | `/plugin info <插件名>` | 单个插件的详情（来源仓库、提交、本地改动、上游状态） |
 | `/plugin check` | 检查全部已装插件的上游更新 |
 | `/plugin install <插件名> [ref] [--force=true]` | 安装（已装过的用 `update`） |
 | `/plugin update <插件名 …\|all> [--force=true]` | 更新（没装过时等价于安装） |
 | `/plugin uninstall <插件名> [--purge=true]` | 卸载（进回收站，可找回） |
 | `/plugin add <仓库> [name] [ref] [subdir] [--force=true]` | 装列表文件里没有的仓库 |
+| `/plugin upload [--force=true]` | **上传 zip 安装**（附在同一条消息 / 发完命令再发 / 引用文件消息）|
 | `/plugin refresh` | 重新拉取列表文件（清缓存） |
 | `/plugin trash [--purge=true] [--keep=N]` | 查看 / 清理回收站 |
 
 `<名称>` 是必填、`[名称]` 是可选的；键值参数写 `--键=值`（例如 `--force=true`），
 `key=value` 不带 `--` 会被当成位置参数。
+
+> 旧的内置 `/plugins` 已**合并**进这里：`/plugins` 不再由框架提供，而是
+> `plugin_manager` 注册的**等价别名**（同一个渲染器、同一个权限档
+> `superuser + private`）。`/plugins installed`、`/plugins <关键字>` 也照样能用。
 
 常用流程：
 
@@ -55,6 +63,11 @@
 /plugin check                    # 看哪些能更新
 /plugin update all               # 一起更新
 /plugin uninstall ai_chat        # 卸载（data/ 留在原地）
+```
+
+```
+/plugin upload                   # 然后发一个 .zip（3 分钟内有效）
+/plugin upload --force=true      # 覆盖本地改动 / 接管同名目录
 ```
 
 ### 1.1 安装与更新有什么区别
@@ -88,8 +101,86 @@
 - **卸载保护**：还有已启用插件依赖它时，`/plugin uninstall <被依赖的>` 会被
   框架拒绝（回执里说明谁在依赖它）；先卸载使用者或显式 force 才动得了。
 
-`/plugin list` 里带依赖的插件会标 `🔗需 store（缺 store）`，`/plugin info`
-里展开完整依赖清单。
+`/plugin list`（或 `/plugins`）的「已安装」段里按依赖顺序列出，被依赖挡住的
+显示 `[⛔] 名字 —— 缺少 store`；「可安装」段里的插件会标 `🔗需 store`。
+`/plugin info` 里展开完整依赖清单。
+
+### 1.4 上传 zip 安装（不经 GitHub）
+
+把插件包打成一个 zip，在**私聊**里发上来即可（不动 GitHub、不需要列表文件）。
+交互照 `oj_bank` 的 `/oj submit` 设计：**格式错误当场回你，慢动作（装依赖/
+替换/重载）才进后台**。
+
+```
+/plugin upload                 # 先发命令，再发 zip（3 分钟内有效）
+/plugin upload --force=true    # 覆盖本地改动 / 接管同名目录
+/plugin cancel                 # 取消「等 zip」的等待
+```
+
+zip 可以附在**同一条消息**里、发完命令后**再发**，或者**引用**一条文件消息
+（来源优先级与 submit 一致：同消息 → 引用 → 等下一发）。文件获取沿用
+`oj_bank` 的同一套做法（`fileintake.py`）：框架文件 API 优先
+（`FileManager` / `ApiClient` 的流式下载），拿不到再退 http 直连或本机路径
+（本机路径限定在 `upload.local_roots` 白名单内，默认是 NapCat 的缓存目录）。
+
+**打包方式**（最常见的「zip 里套一个同名目录」）：
+
+```
+<插件名>.zip
+└── <插件名>/                  ← zip 里唯一的文件夹，名字就是插件名
+    ├── __init__.py            ← 必须有：PluginBase 子类（name / version 写在这里）
+    ├── <其他模块>.py
+    ├── README.md              ← 可选，会**原样保留**
+    └── requirements.txt       ← 可选，安装前自动装
+```
+
+- **只能有一个顶层文件夹**：根目录直接放文件、或出现第二个顶层文件夹都会被拒绝；
+- **插件名 = 文件夹名**（zip 文件名、代码里的 `name` 声明都不参与命名）；
+  代码声明与文件夹名不一致时拒绝（`--force=true` 仍按文件夹名装）；
+- 文件夹名要能当插件目录名（字母数字开头，只含 `_ . -`），否则拒绝并提示重新打包；
+- **包原样安装**：README、文档、测试这些都会落进 `plugins/<名>/`（只排
+  `__pycache__`、`.git`、`.DS_Store` 这类工具垃圾）—— 与 GitHub 安装的
+  「过滤开发文件」策略不同，因为上传包就是用户给的成品。
+
+**包检查**（`zips.py`，任何一条不过都**一个文件都不落盘**，且当场回 `❌`）：
+
+| 检查 | 拒绝的东西 |
+|------|-----------|
+| 大小 | 压缩包本身 > `upload.max_zip_bytes` |
+| 有效性 | 不是 zip、CRC 校验失败（`testzip`）、条目被加密 |
+| 成员名 | 绝对路径、盘符（`C:`）、`..`、反斜杠绕过、NUL |
+| 特殊文件 | 符号链接、设备/管道/套接字 |
+| zip 炸弹 | 解压总量、单文件、文件数三个上限（解压前按 header 声明值先判） |
+| 结构 | zip 里**只能有一个顶层文件夹**（文件夹名即插件名）；文件夹里必须有 `__init__.py` 或 `main.py`；根目录直接放文件/第二个文件夹都拒绝 |
+
+**身份**：插件名**只由 zip 里的顶层文件夹名决定** —— 命令参数、zip 文件名、
+代码里的 `name` 声明都不参与命名。文件夹名与代码声明不一致时拒绝
+（`--force=true` 仍按文件夹名装）。同名目录如果**不是本管理器装的**，默认拒绝，
+`--force=true` 才接管（旧目录先进回收站）。
+
+**等待窗口与取消**（与 `/oj submit` 相同）：
+
+- `/plugin upload` 不带附件时进入等待，提示里写明打包方式与有效期；
+- 窗口里发 **普通文本**不会打断（窗口保留）；发**命令**不会被吞（`/plugin cancel`
+  才能生效）；
+- 窗口里发的 zip **校验失败 → 回执「再发一次 zip 就行，命令不用重发」，窗口保留**；
+- 校验通过 → 窗口消费，安装进后台，完成后私聊回执。
+
+**requirements.txt 自动安装**（`requirements.py`）：
+
+- 包根下的 `requirements.txt` 会在**替换插件目录之前**用
+  `python -m pip install --no-input -r ...` 装进**当前解释器**（机器人自己的
+  venv），cwd 是暂存目录（相对路径形式的依赖也能解析）；
+- pip 失败 → **放弃本次替换**，旧版本原样可用，回执里附 pip 输出尾部；
+- 文件只允许「包规格」行（`name`、`name==1.2`、`name[extra]>=1,<2`、带环境标记）；
+  `-r` / `-e` / `--index-url` 这类会被拒绝 —— 私有源等额外参数请写
+  `config.json → plugins.plugin_manager.requirements.pip_args`（运维可控）；
+- 安装完成后与 GitHub 安装走完全相同的流程：文件级计划 → 原子替换 →
+  记账（`source=upload`，sha 是 zip 的 sha256）→ 热重载 → 依赖检查提醒。
+
+> ⚠️ 上传安装等于「用 QQ 文件在服务器上装代码 + 装 pip 包」，所以它和其它
+> 子命令一样只对**私聊超管**开放，并且可以用 `upload.enabled=false`（整体关掉）
+> 或 `requirements.enabled=false`（只装插件、不自动装依赖）收紧。
 
 ---
 
@@ -203,6 +294,16 @@ GitHub API 补记；老记账缺提交号时，`/plugin check` 会顺手补上�
 | `keep_local_extra_files` | `true` | 更新时保留你自己加进插件目录的文件 |
 | `max_report_lines` | `12` | 一条回执最多列几行 |
 | `plugin_dir` | `""` | 装卸动作落在哪个目录（留空 = 跟随框架的 `plugin_dir`；一般不用改） |
+| `upload.enabled` | `true` | 是否允许 `/plugin upload`（`false` 时命令直接拒绝） |
+| `upload.max_zip_bytes` | `20971520`（20 MB）| 上传 zip 的大小上限（消息段声明值 + 流式累计双闸） |
+| `upload.max_uncompressed_bytes` | `104857600`（100 MB）| 解压总量上限（zip 炸弹防护） |
+| `upload.max_file_bytes` | `10485760`（10 MB）| 包内单文件上限 |
+| `upload.max_files` | `2000` | 包内文件数上限 |
+| `upload.pending_seconds` | `180` | `/plugin upload` 之后等 zip 的窗口（秒） |
+| `upload.local_roots` | `[]` | 允许读取的本机目录（NapCat 与本插件同机时）；**留空 = 用内置默认值，不是不限制** |
+| `requirements.enabled` | `true` | 上传包里 `requirements.txt` 是否自动 pip 安装 |
+| `requirements.timeout` | `300` | pip 安装超时（秒），超时会 kill 子进程 |
+| `requirements.pip_args` | `[]` | 传给 pip 的额外参数（如 `--extra-index-url=https://...`） |
 
 匿名配额用尽时命令会明确说「配额用尽、几点之后重试，或去配 token」，
 不会把 403 说成「仓库不存在」。
@@ -218,7 +319,10 @@ GitHub API 补记；老记账缺提交号时，`/plugin check` 会顺手补上�
    且旧版本进回收站；
 4. **不删数据**：`data/`、`.trash/`、你自己加的文件都不在删除范围内；
 5. **不动自己**：`plugin_manager` 拒绝在运行中装卸自己（`SelfOperationError`），
-   避免把自己从磁盘上抹掉；要更新它请 `git pull` 或手工替换目录后重启。
+   避免把自己从磁盘上抹掉；要更新它请 `git pull` 或手工替换目录后重启；
+6. **上传包按不可信输入对待**：解压前逐个成员校验（穿越/链接/特殊文件/炸弹），
+   逐成员手写落盘（`zipfile` 没有 tarfile 那样的 `filter=` 兜底）；pip 只在
+   显式声明的 `requirements.txt` 上跑，且失败即放弃替换。
 
 ---
 
@@ -258,6 +362,18 @@ GitHub API 补记；老记账缺提交号时，`/plugin check` 会顺手补上�
 **Q：装完提示「还缺必需依赖」，它自己为什么不加载？**
 那是对的：插件声明的必需依赖不在时，框架**不加载**它（避免一个半死的实例
 在里面悄悄收事件）。按提示 `/plugin install <缺的依赖>`，装完会自动加载。
+
+**Q：上传的 zip 里要不要带版本号？**
+包里的 `PluginBase.version` 会被读出来记进记账；`requirements.txt` 可选，
+有就自动装。
+
+**Q：`requirements.txt` 里能写 `-r base.txt` 或 `-e .` 吗？**
+不能 —— 上传包里只允许「包规格」行；这两类会让「文件里写了什么」变得不可审计。
+私有源用 `requirements.pip_args`（运维在 `config.json` 里配）。
+
+**Q：上传安装失败会不会把插件弄坏？**
+不会：zip 校验在落盘前、requirements 在替换前，任何一步失败 `plugins/` 都不动；
+替换失败会自动把旧目录挪回来，旧版本还有回收站备份。
 
 **Q：想装自己的私有插件？**
 `/plugin add git@github.com:you/my-plugin.git`（私有仓库需要配 `token`），

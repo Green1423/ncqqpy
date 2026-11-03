@@ -855,7 +855,7 @@ class PluginManager:
     """插件管理器 - 加载、卸载、热重载。
 
     用法:
-        mgr = PluginManager(plugin_dir="./plugins", api=api, bus=bus, ...)
+        mgr = PluginManager(plugin_dir="./plugin list", api=api, bus=bus, ...)
         await mgr.load_all()
         await mgr.enable_all()
 
@@ -890,7 +890,7 @@ class PluginManager:
         #: 加载期依赖检查只看这个集合 —— 否则 `load_all()` 里
         #: 「A 已加载但尚未启用」会让依赖 A 的 B 永远加载不了（鸡生蛋）。
         self._disabled: set[str] = set()
-        #: 因依赖不满足而**没加载**的插件：{名字: 原因}。`/plugins` 与 watcher 用
+        #: 因依赖不满足而**没加载**的插件：{名字: 原因}。`/plugin list` 与 watcher 用
         #: 它解释「文件明明在、为什么没加载」，而不是让人去猜。
         self._dep_blocked: dict[str, str] = {}
         #: 依赖图缓存（每次插件集合变化时失效）：拓扑序与反向边都由它算。
@@ -1012,7 +1012,7 @@ class PluginManager:
         """插件集合变了 → 依赖图作废；`changed` 相关插件的阻塞记录也作废。
 
         ⚠️ **不能整张 `_dep_blocked` 一起清**：它是「上次为什么被挡下」的判定
-        缓存，也是把原因呈现给运维（`/plugins`、`blocked_reason`）的唯一来源。
+        缓存，也是把原因呈现给运维（`/plugin list`、`blocked_reason`）的唯一来源。
         整张清掉的后果：随便哪个插件加载成功，其它「因缺依赖/声明写坏」被挡下的
         插件就从视图里消失，运维再也看不到原因（测试逼出来的）。
 
@@ -1092,7 +1092,7 @@ class PluginManager:
         """**现在**这个插件的必需依赖满足没有（`DependencyCheck`）。
 
         与 `blocked_reason()` 的区别：那个是「上次加载时为什么被挡下」的缓存，
-        这个是实时的（依赖可能刚装上）。诊断类入口（`/plugins`）用这个，
+        这个是实时的（依赖可能刚装上）。诊断类入口（`/plugin list`）用这个，
         watcher 用缓存即可（它只关心「要不要现在重试」）。
         """
         from .deps import check_dependencies as _check
@@ -1411,7 +1411,7 @@ class PluginManager:
             detail = f"（{'、'.join(blocked)}）" if blocked else ""
             self.logger.warning(
                 f"插件 {name} 的依赖未就绪{detail}，跳过启用"
-                + ("；被显式禁用的依赖需要先自己启用（/plugins 看状态）"
+                + ("；被显式禁用的依赖需要先自己启用（/plugin list 看状态）"
                    if any(d in self._disabled for d in blocked) else ""))
             return False
         self._disabled.discard(name)
@@ -1465,7 +1465,7 @@ class PluginManager:
 
         **被显式禁用的插件不会被顺带启用**：`disable()` 是运维/命令的明确决定，
         不该因为另一个插件要启动就被悄悄推翻。这种「依赖被禁用」的情况会如实
-        返回 False，由调用方说明原因（`/plugins` 里能看到它是 ✗）。
+        返回 False，由调用方说明原因（`/plugin list` 里能看到它是 ✗）。
         """
         plugin = self._plugins.get(name)
         if plugin is None:
@@ -1662,7 +1662,7 @@ class PluginManager:
             return ok
 
         # 依赖不满足 → **不回滚**：旧实例活着也服务不了（它的依赖不在/被禁用），
-        # 留着只会让 `/plugins` 显示一个「加载了但永远起不来」的僵尸。
+        # 留着只会让 `/plugin list` 显示一个「加载了但永远起不来」的僵尸。
         # 与「新代码导入失败」区分开：那种回滚是有意义的（旧代码还能干活）。
         if self._dep_blocked.get(name):
             self.logger.warning(

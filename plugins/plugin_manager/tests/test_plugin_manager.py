@@ -31,6 +31,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +54,7 @@ sys.path.insert(0, str(PLUGIN_SRC.parent))         # 让 `import plugin_manager.
 
 from plugin_manager import installer as inst                        # noqa: E402
 from plugin_manager import registry                                 # noqa: E402
+from plugin_manager import zips as zips_mod                         # noqa: E402
 from plugin_manager.main import PluginManagerPlugin                 # noqa: E402
 
 SUPERUSER = 10001
@@ -216,6 +218,7 @@ class LocalGitHub:
 class FakeApi:
     def __init__(self):
         self.sent: list[tuple[str, str]] = []
+        self.messages: dict[int, dict] = {}     # get_msg：引用消息用
 
     async def send_private_msg(self, user_id, message, **kwargs):
         text = message if isinstance(message, str) else "".join(
@@ -227,6 +230,9 @@ class FakeApi:
     async def send_group_msg(self, group_id, message, **kwargs):
         self.sent.append((f"group:{group_id}", str(message)))
         return {"message_id": len(self.sent)}
+
+    async def get_msg(self, message_id):
+        return self.messages.get(int(message_id), {})
 
     def texts(self) -> str:
         return "\n".join(text for _to, text in self.sent)
@@ -315,10 +321,45 @@ class Harness:
         self.reply_text = "\n".join(str(i) for i in items)
         return self.reply_text
 
-    async def drain(self):
-        """等后台任务跑完，并把**这一批**的后台回执收进 `api.sent`。"""
+    def file_event(self, path: Path, *, text: str = "", user_id: int = SUPERUSER,
+                   reply_to: int | None = None) -> MessageEvent:
+        """一条「带文件段」的私聊消息事件（`file` 段指向本机路径）。"""
+        segments = []
+        if text:
+            segments.append({"type": "text", "data": {"text": text}})
+        if reply_to is not None:
+            segments.append({"type": "reply", "data": {"id": str(reply_to)}})
+        segments.append({"type": "file", "data": {
+            "name": path.name, "file_size": path.stat().st_size,
+            "url": str(path)}})
+        return MessageEvent(
+            message_type="private", user_id=user_id, group_id=None,
+            self_id=1, sender=Sender(user_id=user_id, nickname="tester"),
+            message=segments, raw_message=text)
+
+    async def run_file(self, path: Path, *, text: str = "",
+                       user_id: int = SUPERUSER, reply_to: int | None = None):
+        """把「带文件段的消息」丢给命令系统（等同于用户发文件顺带发命令）。"""
+        event = self.file_event(path, text=text, user_id=user_id,
+                                reply_to=reply_to)
+        result = await self.cmds.handle(event)
+        if isinstance(result, tuple):
+            return None if result[0] == "_not_found" else "__unknown__"
+        if result is None:
+            return None
+        items = result if isinstance(result, list) else [result]
+        self.reply_text = "\n".join(str(i) for i in items)
+        return self.reply_text
+
+    async def drain(self, *, clear: bool = True):
+        """等后台任务跑完，并把**这一批**的后台回执收进 `api.sent`。
+
+        `clear=False` 用于「要先看命令当场回执、再看后台回执」的用例：
+        安装任务可能在命令返回前就跑完，先清空会把两条都清掉。
+        """
         plugin = self.plugin
-        self.api.sent.clear()
+        if clear:
+            self.api.sent.clear()
         for _ in range(200):
             pending = [t for t in plugin._pending if not t.done()]
             if not pending:
@@ -633,9 +674,11 @@ async def test_permissions(work: Path):
     subs = getattr(parent, "subcommands", {}) or {}
     check("命令都注册上了", all(
         name in subs for name in ("list", "info", "check", "install", "update",
-                                  "uninstall", "add", "refresh", "trash")),
+                                  "uninstall", "add", "upload", "refresh",
+                                  "trash")),
         str(sorted(subs)))
-    for name in ("list", "install", "update", "uninstall", "add", "trash"):
+    for name in ("list", "install", "update", "uninstall", "add", "upload",
+                 "trash"):
         handler = subs.get(name)
         check(f"{name} 声明了 superuser + private",
               handler is not None and handler.permission == "superuser"
@@ -727,8 +770,8 @@ async def test_dependencies(work: Path):
           harness.mgr.blocked_reason("app"))
 
     out = await harness.run("/plugin list")
-    check("list 标出依赖与缺失",
-          "🔗需 store" in (out or "") and "缺 store" in (out or ""), str(out))
+    check("合并后的总览标出被依赖挡住的插件",
+          "⛔" in (out or "") and "缺少 store" in (out or ""), str(out))
     out = await harness.run("/plugin info app")
     check("info 展示依赖", "依赖：store" in (out or ""), str(out))
 
@@ -746,6 +789,440 @@ async def test_dependencies(work: Path):
     await harness.stop()
 
 
+# ==================== 11. 上传 zip 安装 ====================
+
+
+def plugin_zip(name: str, *, version: str = "1.0.0", extra: dict | None = None,
+               wrapper: str | None = None, requirements: str = "") -> bytes:
+    """打一个「合法插件包」的 zip。
+
+    约定的打包方式：zip 里只有一个顶层文件夹，**文件夹名就是插件名**；
+    `wrapper=""` 用于构造"根目录直接放文件"的坏包。
+    """
+    files = {
+        "__init__.py": "from .main import P\n",
+        "main.py": ("from napcat import PluginBase\n\n\nclass P(PluginBase):\n"
+                    f"    name = {name!r}\n    version = {version!r}\n"),
+    }
+    if requirements:
+        files["requirements.txt"] = requirements
+    files.update(extra or {})
+    folder = name if wrapper is None else wrapper
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rel, text in files.items():
+            zf.writestr(f"{folder}/{rel}" if folder else rel, text)
+    return buf.getvalue()
+
+
+def bad_zip(kind: str) -> bytes:
+    """构造各种「不该被接受」的 zip。"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        if kind == "traversal":
+            zf.writestr("../escape.py", "x = 1\n")
+        elif kind == "absolute":
+            zf.writestr("/tmp/escape.py", "x = 1\n")
+        elif kind == "backslash":
+            zf.writestr("..\\escape.py", "x = 1\n")
+        elif kind == "symlink":
+            info = zipfile.ZipInfo("demo/link")
+            info.external_attr = (0o120777 << 16)
+            zf.writestr(info, "/etc/passwd")
+        elif kind == "no-entry":
+            zf.writestr("demo/readme.md", "no code here\n")
+        elif kind == "root-files":
+            zf.writestr("__init__.py", "x = 1\n")
+            zf.writestr("main.py", "y = 1\n")
+        elif kind == "two-folders":
+            zf.writestr("a/__init__.py", "x = 1\n")
+            zf.writestr("b/__init__.py", "y = 1\n")
+        elif kind == "single-file":
+            zf.writestr("demo.py", "x = 1\n")
+        elif kind == "empty":
+            pass
+    return buf.getvalue()
+
+
+def write_file(path: Path, data: bytes) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+def test_zip_limits():
+    """zip 检查的纯逻辑部分：上限与同名条目（不用起插件）。"""
+    print("\n[11.0] zip 检查（纯逻辑：上限 / 同名条目）")
+    limits = zips_mod.ZipLimits()
+    members, _names, _warn, folder = zips_mod.inspect_zip(plugin_zip("demo"),
+                                                          limits=limits)
+    check("正常包通过检查（2 个文件）", len(members) == 2)
+    check("顶层文件夹名被识别（= 插件名）", folder == "demo", folder)
+
+    def rejected(data: bytes, *, limits) -> str:
+        try:
+            zips_mod.inspect_zip(data, limits=limits)
+            return ""
+        except zips_mod.ZipError as exc:
+            return str(exc)
+
+    reason = rejected(plugin_zip("demo"),
+                      limits=zips_mod.ZipLimits(max_uncompressed_bytes=10))
+    check("解压总量超限被拒（zip 炸弹防护）", "zip 炸弹" in reason or "总量" in reason,
+          reason)
+    reason = rejected(plugin_zip("demo"),
+                      limits=zips_mod.ZipLimits(max_file_bytes=10))
+    check("单文件超限被拒", "太大" in reason, reason)
+    reason = rejected(plugin_zip("demo"),
+                      limits=zips_mod.ZipLimits(max_files=1))
+    check("文件数超限被拒", "文件太多" in reason, reason)
+    reason = rejected(plugin_zip("demo"),
+                      limits=zips_mod.ZipLimits(max_zip_bytes=10))
+    check("压缩包本身超限被拒", "压缩包太大" in reason, reason)
+
+    dup = io.BytesIO()
+    with zipfile.ZipFile(dup, "w") as zf:
+        zf.writestr("demo/main.py", "A = 1\n")
+        zf.writestr("demo/main.py", "A = 2\n")
+    reason = rejected(dup.getvalue(), limits=limits)
+    check("同名文件被拒（后写会覆盖先写）", "同名文件" in reason, reason)
+
+    for kind, label in (("root-files", "根目录直接放文件"),
+                        ("two-folders", "两个顶层文件夹"),
+                        ("single-file", "顶层只有单个文件")):
+        reason = rejected(bad_zip(kind), limits=limits)
+        check(f"结构不对被拒：{label}", "只能有一个" in reason, reason)
+
+
+async def test_upload(work: Path):
+    print("\n[11] 上传安装：/oj-submit 式流程（校验→等待→安装）/ 包原样")
+    harness = Harness(work / "upload")
+    plugin = await harness.start(config={"upload.local_roots": [str(work)]})
+    harness.set_manifest({"name": "demo", "repo": "local/demo", "ref": "main"})
+    harness.use_fake_github()
+    good = write_file(work / "demo.zip",
+                      plugin_zip("demo", extra={"README.md": "# demo\n"}))
+
+    # ---- 11.1 同一条消息带 zip：校验通过才落后台 ----
+    out = await harness.run_file(good, text="/plugin upload")
+    check("同消息 zip：命令当场回「校验通过」", "校验通过" in (out or ""), str(out))
+    check("同消息 zip：命令回执里没有「安装完成」（装是后台的）",
+          "安装完成" not in (out or ""), str(out))
+    await harness.drain()
+    texts = harness.api.texts()
+    check("后台回执有安装完成", "安装完成" in texts, texts)
+    check("插件目录已建立", (harness.plugin_dir / "demo" / "main.py").is_file())
+    check("README 按包原样保留（不再过滤）",
+          (harness.plugin_dir / "demo" / "README.md").is_file())
+    record = plugin._store.get("demo")
+    check("记账来源标成 upload",
+          record is not None and record.source == "upload", str(record))
+    check("记账里是 zip 指纹（sha256）",
+          record is not None and len(record.sha) == 64, str(record.sha if record else ""))
+    check("框架里已加载", harness.mgr.get("demo") is not None)
+
+    # ---- 11.2 pending：先发命令（/oj submit 式提示），再发文件 ----
+    await harness.run("/plugin uninstall demo --purge=true")
+    out = await harness.run("/plugin upload")
+    check("upload 无附件时给出等待提示", "zip 发上来" in (out or ""), str(out))
+    check("提示里有取消指令", "/plugin cancel" in (out or ""), str(out))
+    check("提示里写明打包方式（只有一个文件夹、文件夹名即插件名）",
+          "只有一个文件夹" in (out or "") and "文件夹名就是插件名" in (out or ""),
+          str(out))
+    await harness.bus.dispatch(harness.file_event(good))
+    await harness.drain()
+    check("pending 自动接住下一条文件", harness.mgr.get("demo") is not None,
+          harness.api.texts())
+    check("pending 被消费（不会重复触发）",
+          plugin._upload_pending == {}, str(plugin._upload_pending))
+
+    # ---- 11.3 引用一条文件消息 ----
+    await harness.run("/plugin uninstall demo --purge=true")
+    harness.api.messages[4242] = {"message": [{"type": "file", "data": {
+        "name": "demo.zip", "file_size": good.stat().st_size, "url": str(good)}}]}
+    event = harness.file_event(good, text="/plugin upload", reply_to=4242)
+    event.message = [seg for seg in event.message if seg.get("type") != "file"]
+    result = await harness.cmds.handle(event)
+    check("引用消息：命令当场回「校验通过」", "校验通过" in str(result), str(result))
+    await harness.drain()
+    check("引用消息：装上了", harness.mgr.get("demo") is not None,
+          harness.api.texts())
+
+    # ---- 11.4 sample_pkg 式包：类写在 __init__.py、无 main.py、带 README ----
+    await harness.run("/plugin uninstall demo --purge=true")
+    pkg_buf = io.BytesIO()
+    with zipfile.ZipFile(pkg_buf, "w") as zf:
+        zf.writestr("sample_pkg/__init__.py",
+                    "from napcat import PluginBase\n\n\n"
+                    "class SamplePkgPlugin(PluginBase):\n"
+                    "    name = 'sample_pkg'\n    version = '1.2.0'\n")
+        zf.writestr("sample_pkg/sample_api.py", "VALUE = 1\n")
+        zf.writestr("sample_pkg/README.md", "# sample_pkg\n")
+    pkg_zip = write_file(work / "sample_pkg.zip", pkg_buf.getvalue())
+    out = await harness.run_file(pkg_zip, text="/plugin upload")
+    check("「类写在 __init__.py」式包（无 main.py）通过校验", "校验通过" in (out or ""), str(out))
+    await harness.drain()
+    target = harness.plugin_dir / "sample_pkg"
+    check("「类写在 __init__.py」式包按原样安装",
+          (target / "__init__.py").is_file() and (target / "sample_api.py").is_file()
+          and (target / "README.md").is_file(),
+          str(sorted(p.name for p in target.iterdir())) if target.is_dir() else "无目录")
+    check("识别包内 name/version", plugin._store.get("sample_pkg").version == "1.2.0",
+          str(plugin._store.get("sample_pkg")))
+    check("框架能加载它", harness.mgr.get("sample_pkg") is not None)
+    await harness.run("/plugin uninstall sample_pkg --purge=true")
+
+    # ---- 11.5 各种坏包：命令当场拒绝，一个都不落盘 ----
+    for kind, label, needle in (
+            ("traversal", "路径穿越", "路径穿越"),
+            ("absolute", "绝对路径", "绝对路径"),
+            ("backslash", "反斜杠穿越", "路径穿越"),
+            ("symlink", "符号链接", "符号链接"),
+            ("empty", "空包", "空"),
+            ("root-files", "根目录直接放文件", "根目录只能有一个文件夹"),
+            ("two-folders", "两个顶层文件夹", "根目录只能有一个文件夹"),
+            ("single-file", "顶层只有单个文件", "文件夹")):
+        bad = write_file(work / f"bad-{kind}.zip", bad_zip(kind))
+        out = await harness.run_file(bad, text="/plugin upload")
+        check(f"坏包当场被拒：{label}",
+              (out or "").startswith("❌") and needle in (out or ""), str(out))
+    await harness.run("/plugin uninstall demo --purge=true")
+    out = await harness.run_file(write_file(work / "notzip.zip", b"hello world"),
+                                 text="/plugin upload")
+    check("不是 zip 的文件当场被拒", "不是 zip" in (out or ""), str(out))
+    missing = write_file(work / "no-entry.zip", bad_zip("no-entry"))
+    out = await harness.run_file(missing, text="/plugin upload")
+    check("没有入口文件的包当场被拒",
+          "既没有 __init__.py" in (out or ""), str(out))
+    check("坏包都没有落盘", not (harness.plugin_dir / "demo").exists())
+
+    # ---- 11.6 大小闸（消息段声明大小先挡，不下载） ----
+    plugin.config.set("upload.max_zip_bytes", 200)
+    out = await harness.run_file(good, text="/plugin upload")
+    check("超过大小上限当场被拒", "太大" in (out or ""), str(out))
+    plugin.config.set("upload.max_zip_bytes", 20 * 1024 * 1024)
+
+    # ---- 11.7 插件名 = 文件夹名（zip 文件名/代码声明都不算数） ----
+    renamed = write_file(work / "something-else.zip", plugin_zip("demo"))
+    out = await harness.run_file(renamed, text="/plugin upload")
+    check("zip 文件名不影响插件名", "校验通过" in (out or ""), str(out))
+    await harness.drain()
+    check("按文件夹名装上", (harness.plugin_dir / "demo" / "main.py").is_file())
+    await harness.run("/plugin uninstall demo --purge=true")
+
+    declared_other = io.BytesIO()
+    with zipfile.ZipFile(declared_other, "w") as zf:
+        zf.writestr("demo/__init__.py",
+                    "from napcat import PluginBase\n\n\nclass P(PluginBase):\n"
+                    "    name = 'other'\n    version = '1.0.0'\n")
+    mismatch = write_file(work / "declared-other.zip", declared_other.getvalue())
+    out = await harness.run_file(mismatch, text="/plugin upload")
+    check("包内 name 与文件夹名不一致当场被拒", "不一致" in (out or ""), str(out))
+    check("不一致时没有装", not (harness.plugin_dir / "demo").exists())
+    out = await harness.run_file(mismatch, text="/plugin upload --force=true")
+    check("force 后校验通过", "校验通过" in (out or ""), str(out))
+    await harness.drain()
+    check("force 也只按文件夹名装（不会装成 other）",
+          (harness.plugin_dir / "demo" / "__init__.py").is_file()
+          and not (harness.plugin_dir / "other").exists(), harness.api.texts())
+    await harness.run("/plugin uninstall demo --purge=true")
+
+    illegal = io.BytesIO()
+    with zipfile.ZipFile(illegal, "w") as zf:
+        zf.writestr("中文插件/__init__.py", "x = 1\n")
+    out = await harness.run_file(
+        write_file(work / "illegal-name.zip", illegal.getvalue()),
+        text="/plugin upload")
+    check("文件夹名不能当插件名时当场被拒", "不能当插件名" in (out or ""), str(out))
+
+    # ---- 11.8 requirements：成功 / 失败回滚（后台部分） ----
+    harness.fake.files = {
+        "__init__.py": "from .main import P\n",
+        "main.py": ("from napcat import PluginBase\n\n\nclass P(PluginBase):\n"
+                    "    name = 'demo'\n    version = '1.0.0'\n"),
+    }
+    await harness.run("/plugin install demo")
+    await harness.drain()
+    check("仓库装出 v1", (harness.plugin_dir / "demo" / "main.py").is_file())
+
+    v2 = plugin_zip("demo", version="2.0.0", requirements="demo-dep>=1.0\n",
+                    extra={"helper.py": "V = 2\n"})
+    pip_calls: list[list[str]] = []
+
+    async def fake_pip_ok(cmd, cwd, timeout):
+        pip_calls.append(list(cmd))
+        check("pip 用的是当前解释器", cmd[0] == sys.executable, str(cmd[:3]))
+        check("pip 命令带 -r 与 --no-input",
+              "-r" in cmd and "--no-input" in cmd, str(cmd))
+        check("pip 在暂存目录里跑（相对路径可解析）",
+              Path(cwd).is_dir(), str(cwd))
+        return 0, "Successfully installed demo-dep-1.0"
+
+    plugin._pip_runner = fake_pip_ok
+    await harness.run_file(write_file(work / "v2.zip", v2), text="/plugin upload")
+    await harness.drain()
+    texts = harness.api.texts()
+    check("requirements 被安装", pip_calls and "requirements.txt 已安装" in texts,
+          texts)
+    check("新版本落地", (harness.plugin_dir / "demo" / "helper.py").is_file())
+
+    async def fake_pip_fail(cmd, cwd, timeout):
+        return 1, "ERROR: No matching distribution found for demo-dep"
+
+    plugin._pip_runner = fake_pip_fail
+    v3 = plugin_zip("demo", version="3.0.0", requirements="demo-dep>=9.9\n",
+                    extra={"helper.py": "V = 3\n"})
+    await harness.run_file(write_file(work / "v3.zip", v3), text="/plugin upload")
+    await harness.drain()
+    texts = harness.api.texts()
+    check("pip 失败：回执说明放弃安装", "放弃本次安装" in texts, texts)
+    check("pip 失败：附了 pip 输出尾部",
+          "No matching distribution" in texts, texts)
+    check("pip 失败：旧版本原样可用（v2 的 helper 还在）",
+          "V = 2" in (harness.plugin_dir / "demo" / "helper.py").read_text(),
+          (harness.plugin_dir / "demo" / "helper.py").read_text())
+    check("pip 失败：记账仍是 v2",
+          plugin._store.get("demo").version == "2.0.0",
+          str(plugin._store.get("demo")))
+
+    # ---- 11.9 requirements 文件本身不合法（后台解析失败，旧版本不动） ----
+    plugin._pip_runner = fake_pip_ok
+    pip_calls.clear()
+    bad_req = plugin_zip("demo", requirements="-r other.txt\n")
+    await harness.run_file(write_file(work / "bad-req.zip", bad_req),
+                           text="/plugin upload --force=true")
+    await harness.drain()
+    check("requirements 里 -r 被拒且不跑 pip",
+          "requirements.txt 第 1 行" in harness.api.texts() and not pip_calls,
+          harness.api.texts())
+
+    # ---- 11.10 同名目录不是本管理器装的 ----
+    await harness.run("/plugin uninstall demo --purge=true")
+    (harness.plugin_dir / "foreign").mkdir(parents=True, exist_ok=True)
+    (harness.plugin_dir / "foreign" / "main.py").write_text("x = 1\n")
+    foreign = write_file(work / "foreign.zip", plugin_zip("foreign"))
+    out = await harness.run_file(foreign, text="/plugin upload")
+    check("同名但非本管理器装的：当场拒绝",
+          "不是本管理器装的" in (out or ""), str(out))
+    check("默认拒绝时目录没被动",
+          (harness.plugin_dir / "foreign" / "main.py").read_text() == "x = 1\n")
+    out = await harness.run_file(foreign, text="/plugin upload --force=true")
+    await harness.drain()
+    check("--force 才接管同名目录",
+          (harness.plugin_dir / "foreign" / "__init__.py").is_file(),
+          harness.api.texts())
+
+    # ---- 11.11 上传自己被拒 ----
+    self_zip = write_file(work / "self.zip", plugin_zip("plugin_manager"))
+    out = await harness.run_file(self_zip, text="/plugin upload")
+    check("不允许上传覆盖 plugin_manager 自己",
+          "不能在运行时装/卸自己" in (out or "")
+          or "plugin_manager 自己" in (out or ""), str(out))
+
+    # ---- 11.12 pending 语义（照 /oj submit） ----
+    await harness.run("/plugin cancel")
+    out = await harness.run("/plugin upload")
+    check("重新开始等待", "zip 发上来" in (out or ""), str(out))
+    # 坏 zip：错误回执，窗口保留
+    await harness.bus.dispatch(harness.file_event(
+        write_file(work / "bad-pending.zip", b"not a zip")))
+    # 这一步是**同步**校验（照 submit），回执在 dispatch 返回时已经发出；
+    # 先断言再 drain（drain 会清空 api.sent，只留后台任务的回执）。
+    check("pending 文件校验失败会回执「命令不用重发」",
+          "命令不用重发" in harness.api.texts(), harness.api.texts())
+    check("pending 校验失败后窗口保留", plugin._upload_pending != {},
+          str(plugin._upload_pending))
+    # 普通命令消息不吞窗口（/oj submit 的「命令前缀不吞」）
+    await harness.run("/plugin list")
+    check("发别的命令不会消费窗口", plugin._upload_pending != {})
+    # 发正确 zip 即可继续
+    await harness.bus.dispatch(harness.file_event(good))
+    await harness.drain()
+    check("保留窗口后直接重发正确 zip 即可", harness.mgr.get("demo") is not None,
+          harness.api.texts())
+    # cancel
+    out = await harness.run("/plugin upload")
+    check("再次进入等待", plugin._upload_pending != {})
+    out = await harness.run("/plugin cancel")
+    check("/plugin cancel 取消成功", "已取消" in (out or ""), str(out))
+    check("取消后窗口清空", plugin._upload_pending == {})
+    out = await harness.run("/plugin cancel")
+    check("没有等待时如实说明", "没有等待" in (out or ""), str(out))
+
+    await harness.stop()
+
+
+# ==================== 12. /plugin list 与 /plugins 合并 ====================
+
+
+async def test_merged_list(work: Path):
+    print("\n[12] /plugin list 与 /plugins 合并 + 权限")
+    harness = Harness(work / "merged")
+    plugin = await harness.start()
+    harness.set_manifest(
+        {"name": "installed_one", "repo": "local/one", "ref": "main",
+         "description": "已装的一个"},
+        {"name": "available_one", "repo": "local/two", "ref": "main",
+         "description": "还没装的一个"})
+    # 装一个（用 GitHub 路径，产生加载 + 记账）
+    harness.fake.files = dep_files("installed_one")
+    await harness.run("/plugin install installed_one")
+    await harness.drain()
+    check("前置：装好一个", harness.mgr.get("installed_one") is not None)
+
+    # 本地手工放一个（不在列表文件里）—— 合并视图应能看到
+    manual = harness.plugin_dir / "manual"
+    manual.mkdir(parents=True, exist_ok=True)
+    for rel, text in dep_files("manual").items():
+        (manual / rel).write_text(text, encoding="utf-8")
+    await harness.mgr.load("manual")
+
+    merged = await harness.run("/plugin list")
+    check("总览含「已安装」段", "已安装：" in (merged or ""), str(merged))
+    check("总览含「可安装」段", "可安装：" in (merged or ""), str(merged))
+    check("已装插件带运行状态", "[✓] installed_one" in (merged or ""), str(merged))
+    check("未装插件在可安装段", "available_one" in (merged or ""), str(merged))
+    check("手工插件也在已安装段里（标「手工安装」）",
+          "manual" in (merged or "") and "手工安装" in (merged or ""), str(merged))
+
+    alias = await harness.run("/plugins")
+    check("/plugins 与 /plugin list 输出一致", alias == merged,
+          f"list={merged!r} / plugins={alias!r}")
+    alias_only = await harness.run("/plugins installed")
+    check("/plugins 支持 installed 过滤",
+          "available_one" not in (alias_only or "")
+          and "installed_one" in (alias_only or ""), str(alias_only))
+    alias_kw = await harness.run("/plugins available")
+    check("/plugins 支持关键字过滤",
+          "available_one" in (alias_kw or "") and "installed_one" not in (alias_kw or ""),
+          str(alias_kw))
+
+    # ---- 权限：非超管 / 群聊都拿不到（含旧 /plugins）----
+    for command in ("/plugin list", "/plugins", "/plugin upload", "/plugin trash"):
+        result = await harness.run(command, user_id=STRANGER)
+        check(f"陌生人私聊拿不到 {command}", result is None, str(result))
+    for command in ("/plugins", "/plugin list"):
+        result = await harness.run(command, user_id=SUPERUSER,
+                                   message_type="group", group_id=123)
+        check(f"超管在群里也拿不到 {command}", result is None, str(result))
+
+    subs = harness.cmds._commands["plugin"].subcommands
+    bad = [name for name, handler in subs.items()
+           if handler.permission != "superuser" or handler.scope != "private"]
+    check("plugin 的**所有**子命令都是 superuser + private", not bad, str(bad))
+    alias_handler = harness.cmds._commands.get("plugins")
+    check("/plugins 别名也是 superuser + private",
+          alias_handler is not None and alias_handler.permission == "superuser"
+          and alias_handler.scope == "private",
+          f"{getattr(alias_handler, 'permission', None)}/"
+          f"{getattr(alias_handler, 'scope', None)}")
+    check("内置 /plugins 已被移除（只剩管理器注册的别名）",
+          alias_handler is not None
+          and getattr(alias_handler, "plugin", "") == "plugin_manager",
+          str(getattr(alias_handler, "plugin", "")))
+    await harness.stop()
+
+
 async def main_async(tmp: Path):
     test_manifest()
     test_plan()
@@ -754,6 +1231,9 @@ async def main_async(tmp: Path):
     await test_permissions(tmp)
     await test_resilience(tmp)
     await test_dependencies(tmp)
+    test_zip_limits()
+    await test_upload(tmp)
+    await test_merged_list(tmp)
 
 
 def main() -> int:

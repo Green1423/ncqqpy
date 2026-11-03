@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from napcat.plugin import PluginBase, discover_plugins
@@ -45,12 +47,12 @@ from napcat.command import (
 )
 import napcat.deps as plugindeps
 
-from . import registry
+from . import fileintake, registry, requirements as reqinstall, zips
 from .github import GithubClient, GithubError, env_token, guess_repo
 from .installer import (
     INSTALLED_FILE, STAGING_DIR, InstallError, InstalledPlugin, InstalledStore,
     Installer, SelfOperationError, clear_staging, collect_files,
-    count_plugin_files, write_json_atomic,
+    count_plugin_files, sniff_plugin_identity, write_json_atomic,
 )
 from .registry import DEFAULT_MANIFEST_URL, ManifestError, PluginEntry, valid_name
 
@@ -138,9 +140,45 @@ class AddSchema(CommandSchema):
     force = BoolField(default=False, description="忽略冲突与改名")
 
 
+class UploadSchema(CommandSchema):
+    #: 插件名**不在这里**：它由 zip 里唯一的顶层文件夹名决定（与打包方式绑定），
+    #: 传名字反而会制造「文件夹叫 A、装了叫 B」的歧义。
+    force = BoolField(default=False, description="覆盖本地改动 / 接管同名目录")
+
+
 class TrashSchema(CommandSchema):
     purge = BoolField(default=False, description="清空回收站")
     keep = IntField(default=0, min=0, description="清空时保留最近 N 份")
+
+
+@dataclass
+class PendingUpload:
+    """「下一条消息是该插件的 zip」的等待状态（照 `/oj submit` 的 PendingSubmit）。
+
+    只在**同一聊天**里生效（`chat_key`），有过期时间；取消走 `/plugin cancel`。
+    """
+
+    user_id: int
+    chat_key: tuple
+    expires_at: float
+    force: bool = False
+
+
+@dataclass
+class PreparedPackage:
+    """已下载、已通过格式检查、等待安装的上传包。
+
+    「校验」与「安装」分开是为了照 submit 的交互：格式错误当场回 `❌`，
+    只有装依赖/替换/重载这种慢动作才进后台。
+    """
+
+    user_id: int
+    file_name: str
+    size: int
+    package: zips.ZipPackage
+    entry: PluginEntry
+    notes: list[str] = field(default_factory=list)
+    force: bool = False
 
 
 # ==================== 插件 ====================
@@ -149,7 +187,8 @@ class TrashSchema(CommandSchema):
 class PluginManagerPlugin(PluginBase):
     name = "plugin_manager"
     version = "1.0.0"
-    description = "基于 GitHub 的插件管理：下载 / 更新 / 卸载（仅私聊 · 仅超管）"
+    description = ("插件管理：GitHub 下载 / 上传 zip / 更新 / 卸载"
+                   "（仅私聊 · 仅超管）")
     author = "Green"
 
     def config_template(self) -> dict:
@@ -172,6 +211,28 @@ class PluginManagerPlugin(PluginBase):
             "keep_local_extra_files": True,
             #: 一条操作报告最多列几行（多了就截断）
             "max_report_lines": 12,
+            #: `/plugin upload`：私聊发 zip 直接安装。
+            #: 上限全是**解压前**就卡住的（zip 炸弹防护），可按机器余量调大。
+            "upload": {
+                "enabled": True,
+                "max_zip_bytes": 20 * 1024 * 1024,
+                "max_uncompressed_bytes": 100 * 1024 * 1024,
+                "max_file_bytes": 10 * 1024 * 1024,
+                "max_files": 2000,
+                #: `/plugin upload` 之后等 zip 的窗口（秒）
+                "pending_seconds": 180,
+                #: 允许直接读的本机目录（NapCat 与本插件同机时）；
+                #: 留空 = 用内置默认值（**不是**「不限制本机读取」）
+                "local_roots": [],
+            },
+            #: 上传包里的 requirements.txt 自动装进**当前解释器**（机器人自己的 venv）。
+            #: pip 失败会放弃本次替换，旧版本原样可用（见 README「上传安装」）。
+            "requirements": {
+                "enabled": True,
+                "timeout": 300,
+                #: 额外参数（如私有源 `--extra-index-url=https://...`），运维可控
+                "pip_args": [],
+            },
         }
 
     # ---- 生命周期 ----
@@ -185,13 +246,24 @@ class PluginManagerPlugin(PluginBase):
         self._client_obj: GithubClient | None = None
         self._busy = False                   # 同一时间只跑一个装卸任务
         self._pending: set[asyncio.Task] = set()
+        #: `/plugin upload` 之后等 zip 的窗口（照 `/oj submit` 的 PendingSubmit）
+        self._upload_pending: dict[int, "PendingUpload"] = {}
+        #: pip 运行器（测试注入假 pip；None = 真跑子进程）
+        self._pip_runner = None
         mdir = self._mdir()
         mdir.mkdir(parents=True, exist_ok=True)
         self._store = InstalledStore(mdir / INSTALLED_FILE)
         self.logger.info("[plugin_manager] 数据目录：%s", mdir)
         self._log_inventory()
 
+    async def on_disable(self):
+        """禁用时丢掉「等 zip」的窗口与暂存（照 `/oj submit` 的清理口径）。"""
+        await super().on_disable()
+        self._upload_pending.clear()
+        clear_staging(self._mdir() / STAGING_DIR)
+
     async def on_unload(self):
+        self._upload_pending.clear()
         for task in list(self._pending):
             task.cancel()
         self._pending.clear()
@@ -641,53 +713,26 @@ class PluginManagerPlugin(PluginBase):
         op = dict(permission="superuser", scope="private")
         plugin = self
 
-        @self.register_command(ROOT, description="插件管理：安装 / 更新 / 卸载（仅私聊 · 仅超管）")
+        @self.register_command(ROOT, description="插件管理：总览 / 安装 / 更新 / 上传 / 卸载"
+                                          "（仅私聊 · 仅超管）")
         async def cmd_plugin(packet: CommandPacket):
             return "插件管理：用 /help plugin 看子命令"
 
         # ---------------- 只读 ----------------
 
         @self.register_command(f"{ROOT}.list", schema=ListSchema, **op,
-                               description="列出可用插件与安装状态")
+                               description="插件总览：已装/已加载 + 可安装（含旧 /plugins）")
         async def cmd_list(params, event):
-            only = (params.only or "all").lower()
-            keyword = (params.keyword or "").strip().lower()
-            manifest = await plugin.load_manifest()
-            installed_names = {n for n in plugin._store.all()
-                               if plugin._plugin_path(n).is_dir()}
-            # 本地装了但列表文件里没有的，也要出现在列表里（否则「装了什么」看不见）
-            extra_local = sorted(n for n in discover_plugins(plugin.plugins_root)
-                                 if n not in manifest and n != plugin.name)
+            return await plugin.render_plugin_list(
+                keyword=params.keyword, only=params.only)
 
-            lines: list[str] = []
-            stale = "（离线：用的是本地缓存的列表文件）" if getattr(
-                plugin, "_manifest_stale", False) else ""
-            lines.append(f"📦 插件列表 {len(manifest.entries)} 个{stale}")
-            if manifest.updated:
-                lines.append(f"列表更新于 {manifest.updated}")
-
-            shown = 0
-            for entry in manifest.entries:
-                if keyword and keyword not in (
-                        entry.name + entry.description + " ".join(entry.tags)).lower():
-                    continue
-                if only == "installed" and entry.name not in installed_names:
-                    continue
-                shown += 1
-                lines.extend(plugin._render_entry(entry, installed_names))
-            if extra_local:
-                shown += len(extra_local)
-                lines.append("\n📁 本地有、列表文件里没有：")
-                for name in extra_local:
-                    record = plugin._store.get(name)
-                    mark = "🔧" if record else "❔"
-                    src = f"← {record.repo}" if record and record.repo else "（来源未知）"
-                    lines.append(f"  {mark} {name} {src}")
-            if not shown:
-                lines.append("（没有匹配的插件）")
-            lines.append("\n/plugin info <插件名> 看详情 · /plugin install <插件名> 安装")
-            lines.append("🛡 仅私聊 · 仅超管可用")
-            return chunk_messages(lines)
+        # 旧的内置 `/plugins` 已合并到这里：**同一个渲染器**、同一个权限档
+        # （superuser + private），只是名字保留，免得大家改习惯。
+        @self.register_command("plugins", schema=ListSchema, **op,
+                               description="插件总览（= /plugin list，旧命令别名）")
+        async def cmd_plugins(params, event):
+            return await plugin.render_plugin_list(
+                keyword=params.keyword, only=params.only)
 
         @self.register_command(f"{ROOT}.info", schema=InfoSchema, **op,
                                description="查看单个插件的详情")
@@ -890,6 +935,32 @@ class PluginManagerPlugin(PluginBase):
                 f"⏳ 开始安装 {name} ← github.com/{repo}"
                 f"{'/' + subdir if subdir else ''}…\n完成后会私聊回执。")
 
+        @self.register_command(f"{ROOT}.upload", schema=UploadSchema, **op,
+                               description="上传 zip 安装（同条消息附 zip / 发完命令再发 / 引用文件消息）")
+        async def cmd_upload(params, event):
+            if not plugin._upload_enabled():
+                raise PluginConfigError(
+                    "上传安装已关闭（config.json → plugins.plugin_manager.upload.enabled）")
+            # 来源顺序与 `/oj submit` 一致：
+            #   ① 命令消息自带的文件段 → ② 引用的消息 → ③ 等用户发下一条 zip
+            segments = fileintake.file_segments(getattr(event, "message", None))
+            if not segments:
+                quoted = await plugin.quoted_message(event)
+                segments = (fileintake.file_segments(quoted)
+                            if quoted is not None else [])
+            if segments:
+                return await plugin._begin_upload(
+                    event, segments[0], params.force)
+            return plugin._start_pending_upload(event, params.force)
+
+        @self.register_command(f"{ROOT}.cancel", schema=None, **op,
+                               description="取消等待中的上传")
+        async def cmd_cancel(event):
+            uid = int(getattr(event, "user_id", 0) or 0)
+            if plugin._cancel_pending_upload(uid):
+                return "✅ 已取消等待上传"
+            return "ℹ️ 现在没有等待中的上传"
+
         @self.register_command(f"{ROOT}.refresh", schema=None, **op,
                                description="重新拉取插件列表文件")
         async def cmd_refresh(event):
@@ -907,6 +978,14 @@ class PluginManagerPlugin(PluginBase):
                 lines.append(f"列表更新于 {manifest.updated}")
             lines.append(" ".join(manifest.names()))
             return chunk_messages(lines)
+
+        # `/plugin upload` 之后「下一条私聊文件」：命令事件只带自己的消息，
+        # 用户通常先发命令再发文件，所以用一个私聊消息监听把文件接住
+        # （与 oj_bank 的 pending submit 同一套思路）。
+        @self.on_message(private=True, hid=f"{self.name}.upload_inbox",
+                         description="上传 zip 安装插件（/plugin upload 之后）")
+        async def on_upload_inbox(event) -> None:
+            await plugin._take_upload_message(event)
 
         @self.register_command(f"{ROOT}.trash", schema=TrashSchema, **op,
                                description="查看 / 清理回收站")
@@ -937,6 +1016,409 @@ class PluginManagerPlugin(PluginBase):
     def _busy_guard(self) -> None:
         if self._busy:
             raise PluginConfigError("上一个装卸任务还没跑完，稍等一下再试")
+
+    # ---- 上传安装（/plugin upload）----
+
+    def _upload_enabled(self) -> bool:
+        return bool(self.config.get("upload.enabled", True))
+
+    def _upload_window(self) -> float:
+        """`/plugin upload` 之后等 zip 的窗口秒数（最小值 30 秒）。"""
+        try:
+            return max(30.0, float(self.config.get("upload.pending_seconds", 180)
+                                   or 180))
+        except (TypeError, ValueError):
+            return 180.0
+
+    def _upload_limits(self) -> zips.ZipLimits:
+        """配置 → 解压上限（非法值退回默认，不静默变成「无上限」）。"""
+        def _int(key: str, default: int) -> int:
+            try:
+                value = int(self.config.get(f"upload.{key}", default) or default)
+            except (TypeError, ValueError):
+                self.logger.warning("[plugin_manager] upload.%s 不是整数，按 %s 用",
+                                    key, default)
+                value = default
+            return max(1, value)
+
+        return zips.ZipLimits(
+            max_zip_bytes=_int("max_zip_bytes", 20 * 1024 * 1024),
+            max_uncompressed_bytes=_int("max_uncompressed_bytes", 100 * 1024 * 1024),
+            max_file_bytes=_int("max_file_bytes", 10 * 1024 * 1024),
+            max_files=_int("max_files", 2000),
+        ).clamp()
+
+    def _upload_roots(self) -> list[str]:
+        """允许读取的本机目录：配置留空 = 用内置默认值（**不是不限制**）。"""
+        raw = self.config.get("upload.local_roots", [])
+        if isinstance(raw, str):
+            raw = [raw]
+        if isinstance(raw, list):
+            roots = [str(item).strip() for item in raw if str(item).strip()]
+            if roots:
+                return roots
+        return list(fileintake.DEFAULT_LOCAL_ROOTS)
+
+    @staticmethod
+    def _reply_message_id(event) -> int:
+        """消息里引用的是哪条（`reply` 段的 id）；没有引用返回 0。"""
+        getter = getattr(event, "get_segments", None)
+        segments = getter("reply") if callable(getter) else []
+        for seg in segments or []:
+            try:
+                return int((seg.get("data") or {}).get("id") or 0)
+            except (TypeError, ValueError):
+                return 0
+        return 0
+
+    async def quoted_message(self, event):
+        """引用那条消息的内容（没有引用/取不到返回 None）。
+
+        只在用户真的引用时才调 `get_msg`（它走 API 节流），失败按「没有引用」
+        处理 —— 上传不该卡在一个取不到的历史消息上。
+        """
+        message_id = self._reply_message_id(event)
+        if not message_id:
+            return None
+        try:
+            data = await self.api.get_msg(message_id)
+        except Exception as exc:  # noqa: BLE001 - 取不到引用不是致命错误
+            self.logger.debug("[plugin_manager] 读取引用消息失败：%r", exc)
+            return None
+        return (data or {}).get("message") if isinstance(data, dict) else data
+
+    @staticmethod
+    def _chat_key(event) -> tuple:
+        """「同一个聊天」的判据（私聊含群临时会话的 group_id），照 `/oj submit`。"""
+        if str(getattr(event, "message_type", "private")) == "group":
+            return ("group", int(getattr(event, "group_id", 0) or 0))
+        return ("private", int(getattr(event, "group_id", 0) or 0),
+                int(getattr(event, "user_id", 0) or 0))
+
+    def _start_pending_upload(self, event, force: bool) -> str:
+        """登记「下一条消息是这个插件的 zip」，返回与 `/oj submit` 同风格的提示。"""
+        uid = int(getattr(event, "user_id", 0) or 0)
+        window = self._upload_window()
+        self._upload_pending[uid] = PendingUpload(
+            user_id=uid, chat_key=self._chat_key(event),
+            expires_at=time.time() + window, force=bool(force))
+        return (f"📦 把插件 zip 发上来（{int(window // 60)} 分钟内有效）：\n"
+                "· 打包：zip 里**只有一个文件夹**，文件夹名就是插件名；\n"
+                "  文件夹里放 `__init__.py`、其他 .py、`README.md`（可选 "
+                "`requirements.txt`）；\n"
+                "· 根目录不要直接放文件，也不要放第二个文件夹；\n"
+                "· 私聊直接发 .zip，或引用一条文件消息再发 /plugin upload；\n"
+                "· 包里可选 `requirements.txt`，安装前会用当前解释器自动装；\n"
+                "· 发别的命令不影响等待，用 /plugin cancel 取消。")
+
+    def _cancel_pending_upload(self, user_id) -> bool:
+        return self._upload_pending.pop(int(user_id or 0), None) is not None
+
+    async def _begin_upload(self, event, segment: dict, force: bool) -> str:
+        """命令自带 / 引用的 zip：**先同步校验包**，通过了才落后台安装。
+
+        与 `/oj submit` 的设计一致：取文件、格式检查这类「当场就能说清楚」的失败
+        直接作为命令返回值回 `❌`；装依赖、替换目录、热重载才进后台（完成后私聊
+        回执）。这样用户不用先等一条后台消息才知道包打错了。
+        """
+        self._busy_guard()
+        self._busy = True
+        uid = int(getattr(event, "user_id", 0) or 0)
+        try:
+            prepared = await self._prepare_upload(segment, bool(force), uid)
+        except (fileintake.PackageFileError, zips.ZipError, InstallError) as exc:
+            self._busy = False
+            return f"❌ {exc}"
+        except BaseException:
+            # 未预期的失败：把忙锁放掉再抛（否则之后所有装卸都被「上一个任务
+            # 还没跑完」卡死）；框架会把异常报给触发者。
+            self._busy = False
+            raise
+        self._cancel_pending_upload(uid)
+        return self._launch_install(prepared)
+
+    def _launch_install(self, prepared: PreparedPackage) -> str:
+        """校验通过 → 后台装（依赖/替换/重载），先回一句「已开始」。"""
+        return self._launch(
+            self._install_package(prepared),
+            f"⏳ {prepared.file_name} 校验通过"
+            f"（{len(prepared.package.files)} 个文件），正在安装 "
+            f"{prepared.entry.name}…\n完成后会私聊回执。")
+
+    async def _take_upload_message(self, event) -> None:
+        """pending 窗口里的**下一条**私聊消息：是 zip 就校验并安装。
+
+        照 `/oj submit` 的 `_on_code_message`：
+        - 过期 / 别的聊天 → 忽略（过期的顺手清掉）；
+        - **命令前缀开头的消息不吞**（返回，让命令系统处理，`/plugin cancel` 才能生效）；
+        - 不是文件 → 保留窗口（用户可能先发一句话）；
+        - 校验失败 → 回 `❌ …（再发一次 zip 就行，命令不用重发）`，**窗口保留**，
+          用户可以直接重发修正后的包。
+        """
+        uid = int(getattr(event, "user_id", 0) or 0)
+        pending = self._upload_pending.get(uid)
+        if pending is None:
+            return
+        if time.time() > pending.expires_at:
+            self._upload_pending.pop(uid, None)
+            return
+        if self._chat_key(event) != pending.chat_key:
+            return
+        prefixes = tuple(getattr(self.cmds.parser, "prefixes", ()) or ())
+        text = str(getattr(event, "plain_text", "") or "")
+        if prefixes and text.lstrip().startswith(prefixes):
+            return
+        if not self.perm.is_superuser(uid):
+            self._upload_pending.pop(uid, None)
+            return
+        segments = fileintake.file_segments(getattr(event, "message", None))
+        if not segments:
+            return
+        await self._take_upload_file(event, pending, segments[0])
+
+    async def _take_upload_file(self, event, pending: PendingUpload,
+                                segment: dict) -> None:
+        """pending 文件：校验（失败保留窗口）→ 后台安装。"""
+        uid = pending.user_id
+        if self._busy:
+            await self._notify(uid, "⏳ 上一个装卸任务还没跑完，稍后再发一次 zip")
+            return
+        prepared = None
+        self._busy = True
+        try:
+            prepared = await self._prepare_upload(
+                segment, pending.force, pending.user_id)
+        except (fileintake.PackageFileError, zips.ZipError, InstallError) as exc:
+            self._busy = False
+            await self._notify(
+                uid, f"❌ {exc}\n（再发一次 zip 就行，命令不用重发）")
+            return
+        except BaseException:
+            self._busy = False
+            raise
+        self._cancel_pending_upload(uid)
+        await self._notify(uid, self._launch_install(prepared))
+
+    async def _prepare_upload(self, segment: dict, force: bool,
+                              user_id: int) -> PreparedPackage:
+        """下载 → zip 格式检查 → 身份/入口校验 → 交给安装任务（**不落 plugins/**）。
+
+        失败会清掉本次暂存目录；成功后的目录由 `_install_package` 的 finally 清理。
+        """
+        limits = self._upload_limits()
+        file_name = fileintake.segment_name(segment) or "上传文件"
+        declared_size = fileintake.segment_size(segment)
+        if declared_size and declared_size > limits.max_zip_bytes:
+            raise zips.ZipError(
+                f"文件太大（{human_size(declared_size)}，"
+                f"上限 {human_size(limits.max_zip_bytes)}）")
+        staging = self._mdir() / STAGING_DIR / "uploads" / str(time.time_ns())
+        try:
+            uploaded = await fileintake.from_segment(
+                segment, self.api, limit=limits.max_zip_bytes,
+                timeout=float(self.config.get("timeout") or 20) * 3,
+                roots=self._upload_roots(), file_manager=self.files)
+            file_name = uploaded.name or file_name
+            package = zips.extract_zip(uploaded.data, staging, limits=limits)
+
+            installer = await self._installer_ready()
+            # 插件名 = zip 里唯一那个顶层文件夹名（与打包方式绑定，不再从
+            # 文件名/代码声明里猜）；文件夹名必须能当插件目录名用。
+            name = str(package.folder or "").strip()
+            if not name or not valid_name(name):
+                raise InstallError(
+                    f"文件夹名 {package.folder!r} 不能当插件名（只允许字母数字与 "
+                    "_ . -，且以字母数字开头）；请把代码放进合法的 `<插件名>/` "
+                    "文件夹再打包")
+            declared_name, version = sniff_plugin_identity(package.package_root)
+            entry = PluginEntry(name=name, repo="", ref="",
+                                description=f"上传安装（{file_name}）",
+                                version=version or "")
+            installer.guard(name)
+            notes = installer.verify(entry, package.package_root,
+                                     allow_mismatch=bool(force))
+            notes.extend(package.warnings)
+            target = installer.local_dir(name)
+            if target.is_dir() and installer.effective_record(name) is None \
+                    and not force:
+                raise InstallError(
+                    f"plugins/{name} 已存在，但不是本管理器装的 ——"
+                    "确认覆盖用 --force=true（旧目录会先进回收站）")
+            return PreparedPackage(
+                user_id=int(user_id or 0), file_name=file_name,
+                size=uploaded.size, package=package, entry=entry,
+                notes=notes, force=bool(force))
+        except Exception:
+            clear_staging(self._mdir() / STAGING_DIR)
+            raise
+
+    async def _install_requirements(self, root: Path):
+        """装上传包里的 `requirements.txt`（没有就返回 None）。
+
+        在**替换插件目录之前**调用：失败会抛 `RequirementsError`，上层据此
+        放弃替换，旧版本保持可用（已与用户确认的失败语义）。
+        """
+        if not (Path(root) / "requirements.txt").is_file():
+            return None
+        if not bool(self.config.get("requirements.enabled", True)):
+            return reqinstall.RequirementsResult(
+                ok=True, skipped=True,
+                path=Path(root) / "requirements.txt")
+        try:
+            timeout = float(self.config.get("requirements.timeout", 300) or 300)
+        except (TypeError, ValueError):
+            timeout = 300.0
+        args = self.config.get("requirements.pip_args", [])
+        if isinstance(args, str):
+            args = [args]
+        args = [str(item) for item in (args or []) if str(item).strip()]
+        result = await reqinstall.install(
+            Path(root), timeout=timeout, extra_args=args,
+            runner=self._pip_runner, logger=self.logger)
+        if not result.ok:
+            raise reqinstall.RequirementsError(
+                "requirements.txt 安装失败（pip 返回非 0），已放弃本次安装",
+                output=result.output)
+        return result
+
+    # ---- 插件总览（/plugin list = /plugins）----
+
+    def _plugin_rank(self) -> dict[str, int]:
+        """依赖顺序的排名：依赖在前（`manager.load_order()` 的唯一口径）。
+
+        管理器不可用或声明成环时退回字典序 —— 总览页不该因为某个插件的
+        依赖写错就整页打不开。
+        """
+        names = set(discover_plugins(self.plugins_root)) - {self.name}
+        manager = self.manager
+        if manager is not None:
+            try:
+                names |= set(manager.plugins)
+                order = manager.load_order()
+                return {name: i for i, name in enumerate(order)}
+            except Exception:  # noqa: BLE001 - 成环/管理器异常 → 字典序
+                pass
+        return {name: i for i, name in enumerate(sorted(names))}
+
+    def _dependency_tag(self, name: str) -> str:
+        """`（依赖 store · 可选 ai_chat）`；没有依赖返回空串。"""
+        report = self.dependency_report(name)
+        bits = []
+        if report.get("required"):
+            bits.append("依赖 " + "、".join(report["required"]))
+        if report.get("optional"):
+            bits.append("可选 " + "、".join(report["optional"]))
+        return f"（{' · '.join(bits)}）" if bits else ""
+
+    def _blocked_reason(self, name: str) -> str:
+        """为什么没加载：优先实时判定（依赖可能刚装好），其次判定缓存。"""
+        manager = self.manager
+        if manager is None:
+            return "依赖不满足"
+        try:
+            verdict = manager.dependency_verdict(name)
+        except Exception:  # noqa: BLE001 - 判定失败不遮住列表
+            verdict = None
+        if verdict is not None and not verdict.ok:
+            return verdict.reason()
+        getter = getattr(manager, "blocked_reason", None)
+        cached = getter(name) if callable(getter) else ""
+        return cached or "依赖不满足"
+
+    def _render_installed(self, name: str, loaded: dict, blocked: set[str]) -> list[str]:
+        """已装插件的一行：加载状态 / 版本 / 依赖 / 来源。"""
+        record = self._store.get(name)
+        plugin_instance = loaded.get(name)
+        if plugin_instance is not None:
+            status = "✓" if plugin_instance.enabled else "✗"
+            if record is None:
+                source = " ← 手工安装"
+            elif record.repo:
+                source = f" ← {record.repo}"
+            elif record.source == "upload":
+                source = " ← 上传安装"
+            else:
+                source = ""
+            return [f"  [{status}] {name} v{plugin_instance.version}"
+                    f"{self._dependency_tag(name)}{source}"]
+        if name in blocked:
+            return [f"  [⛔] {name} —— {self._blocked_reason(name)}"]
+        if record is None:
+            return [f"  [✗] {name} —— 未加载（非本管理器安装）"]
+        missing = "" if self._plugin_path(name).is_dir() else "（目录已不在）"
+        return [f"  [✗] {name} v{record.version or '?'} —— 未加载{missing}"]
+
+    async def render_plugin_list(self, *, keyword: str = "",
+                                 only: str = "all") -> list[str]:
+        """合并后的插件总览（`/plugin list` 与 `/plugins` 的**唯一实现**）。
+
+        两块内容：
+        1. **已安装**：加载状态（✓/✗/⛔）、版本、依赖、来源 —— 原先 `/plugins`
+           的内容；列表文件里没有的（手工装/上传装）也在这一段，标「手工安装」；
+        2. **可安装**：列表文件里还没装的，带介绍/标签/依赖需求。
+
+        `only=installed` 只看第一块，`keyword` 在名字/介绍/标签里过滤。
+        """
+        manifest = await self.load_manifest()
+        manager = self.manager
+        loaded = dict(getattr(manager, "plugins", {}) or {}) if manager else {}
+        blocked = set(getattr(manager, "_dep_blocked", {}) or {}) if manager else set()
+        local_dirs = set(discover_plugins(self.plugins_root)) - {self.name}
+        installed = (local_dirs | set(self._store.all())) - {self.name}
+        rank = self._plugin_rank()
+        keyword = (keyword or "").strip().lower()
+        only = (only or "all").lower()
+
+        def matches(*texts: str) -> bool:
+            if not keyword:
+                return True
+            return keyword in " ".join(str(text) for text in texts).lower()
+
+        def installed_text(name: str) -> str:
+            """已装插件的关键字匹配文本：列表文件的介绍/标签 + 记账的版本/仓库。"""
+            entry = manifest.get(name)
+            if entry is not None:
+                return f"{entry.description} {' '.join(entry.tags)}"
+            record = self._store.get(name)
+            return f"{record.version} {record.repo}" if record else ""
+
+        def order_key(name: str):
+            return (rank.get(name, len(rank)), name)
+
+        stale = "（离线：用的是本地缓存的列表文件）" if getattr(
+            self, "_manifest_stale", False) else ""
+        available = [entry for entry in manifest.entries
+                     if entry.name not in installed]
+        lines = [f"📦 插件（已装 {len(installed)} · 可安装 {len(available)}"
+                 f"）{stale}"]
+        if manifest.updated:
+            lines.append(f"列表更新于 {manifest.updated}")
+
+        shown = 0
+        installed_matched = [
+            name for name in sorted(installed, key=order_key)
+            if matches(name, installed_text(name))]
+        if installed_matched:
+            lines.append("\n已安装：")
+            for name in installed_matched:
+                lines.extend(self._render_installed(name, loaded, blocked))
+            shown += len(installed_matched)
+
+        if only != "installed":
+            entries = [entry for entry in available
+                       if matches(entry.name, entry.description,
+                                  " ".join(entry.tags))]
+            if entries:
+                lines.append("\n可安装：")
+                for entry in entries:
+                    lines.extend(self._render_entry(entry, installed))
+                shown += len(entries)
+
+        if not shown:
+            lines.append("（没有匹配的插件）")
+        lines.append("\n/plugin info <插件名> 看详情 · /plugin install <插件名> 安装")
+        lines.append("🛡 仅私聊 · 仅超管可用（/plugins 与 /plugin list 等价）")
+        return chunk_messages(lines)
 
     def _render_entry(self, entry: PluginEntry, installed: set[str]) -> list[str]:
         """列表里的一行（依赖信息只在 `/plugin info` 里展开，这里只给标记）。"""
@@ -1037,6 +1519,80 @@ class PluginManagerPlugin(PluginBase):
         finally:
             clear_staging(self._mdir() / STAGING_DIR)
             await self._finish_operation(user_id, title, lines, results)
+
+    async def _install_package(self, prepared: PreparedPackage) -> None:
+        """后台：装 requirements → 原子替换（**包原样**）→ 记账 → 热重载。
+
+        校验（下载/zip 检查/身份）已在 `_prepare_upload` 里同步做完，这里只做
+        「慢动作」。顺序仍是刻意的：**requirements 在替换之前**（装失败就不动旧
+        版本），而冲突检查又在 requirements 之前（注定要被拒的操作不该白装依赖）
+        —— 后者由 `install_from_package(before_swap=...)` 保证。
+        """
+        name = prepared.entry.name
+        title = f"📦 安装 {name}"
+        lines: list[str] = []
+        results: list[dict] = []
+        requirement_result = None
+        try:
+            installer = await self._installer_ready()
+
+            async def before_swap() -> list[str]:
+                nonlocal requirement_result
+                requirement_result = await self._install_requirements(
+                    prepared.package.package_root)
+                return []
+
+            result = await installer.install_from_package(
+                prepared.entry, prepared.package.package_root,
+                archive_sha=prepared.package.sha256, force=prepared.force,
+                notes=prepared.notes, before_swap=before_swap)
+            results.append({"name": name, "ok": True, "reload": result.changed})
+
+            lines.append(f"包检查通过：zip（{len(prepared.package.files)} 个文件 · "
+                         f"{human_size(prepared.size)}）")
+            if requirement_result is not None:
+                lines.append(f"依赖：{requirement_result.summary()}")
+            if result.action == "noop":
+                lines.append("内容与已装版本一致，没有改动")
+            else:
+                verb = "安装完成" if result.action == "install" else "更新完成"
+                lines.append(f"{verb}：{name} v{result.version or '?'}"
+                             + (f" · 包指纹 {short_sha(result.new_sha)}"
+                                if result.new_sha else ""))
+                if result.plan is not None:
+                    lines.append("文件：" + result.plan.summary())
+                if result.backup is not None:
+                    lines.append(f"旧版本备份：plugins/.trash/{result.backup.name}")
+            if result.changed:
+                lines.extend(self._dependency_lines(name))
+            lines.extend(f"· {note}" for note in result.notes)
+            lines.append("")
+            lines.append(self._reload_hint(name))
+        except SelfOperationError as exc:
+            results.append({"name": name, "ok": False})
+            lines.append(str(exc))
+        except zips.ZipError as exc:
+            results.append({"name": name, "ok": False})
+            lines.append(f"❌ 包格式不对，没有安装：{exc}")
+        except reqinstall.RequirementsError as exc:
+            results.append({"name": name, "ok": False})
+            lines.append(f"❌ {exc}（旧版本未改动）")
+            if exc.output:
+                # 回执只放最后几行：pip 的 ERROR 在尾部，而 `max_report_lines`
+                # 会把超出的行截掉 —— 整段贴上去反而会把真正的错误截没。
+                lines.append("pip 输出（最后几行）：")
+                lines.extend("  " + row for row in exc.output.splitlines()[-4:])
+        except (InstallError, GithubError, ManifestError) as exc:
+            results.append({"name": name, "ok": False})
+            lines.append(f"❌ {exc}")
+        except Exception as exc:  # noqa: BLE001 - 后台任务不能静默死掉
+            results.append({"name": name, "ok": False})
+            self.logger.error("[plugin_manager] 上传安装 %s 失败", name,
+                              exc_info=True)
+            lines.append(f"❌ 未预期的失败：{type(exc).__name__}: {exc}")
+        finally:
+            clear_staging(self._mdir() / STAGING_DIR)
+            await self._finish_operation(prepared.user_id, title, lines, results)
 
     async def _run_update(self, user_id: int, entries: list[PluginEntry], *,
                           force: bool = False) -> None:

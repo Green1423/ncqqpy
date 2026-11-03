@@ -207,13 +207,15 @@ class WelcomePlugin(PluginBase):
 `Green1423/ncqqpy-plugins` 的 `plugins.json`：
 
 ```text
-/plugin list                    看有哪些插件、装没装
+/plugin list                    插件总览：已装/已加载 + 可安装（= 旧 /plugins）
 /plugin info ai_chat            看单个插件的来源与状态
 /plugin check                   检查全部已装插件的上游更新
 /plugin install ai_chat         安装
 /plugin update all              全部更新
 /plugin uninstall ai_chat       卸载（进回收站 plugins/.trash/，可找回）
 /plugin add <仓库> [name]        装列表文件里没有的仓库
+/plugin upload [--force=true]   上传 zip 安装（附 zip / 发完命令再发 / 引用文件消息）
+/plugin cancel                  取消「等 zip」的等待
 ```
 
 > 🔒 **仅私聊 · 仅超管**：这些子命令都声明 `permission="superuser"` +
@@ -230,16 +232,30 @@ class WelcomePlugin(PluginBase):
   且校验包里的插件名与要装的名字一致；
 - **不装卸自己**：`plugin_manager` 拒绝在运行中动自己，避免把管理器删掉。
 
+**上传 zip 安装**（交互照 `oj_bank` 的 `/oj submit`）：`/plugin upload` 先**同步**
+取文件 + 做格式检查（合法 zip、成员名无穿越/绝对路径/链接、防 zip 炸弹、包根要有
+`__init__.py` 或 `main.py`），**格式错误当场回 `❌`**；通过后窗口消费，装
+`requirements.txt`（**当前解释器的 pip**，失败就放弃本次替换、旧版本原样可用）、
+原子替换、热重载都在后台，完成后私聊回执。不带附件时进入等待窗口：期间发的 zip
+校验失败**窗口保留**（再发一次即可，命令不用重发），发普通文本不打断，
+`/plugin cancel` 取消。
+
+打包方式：zip 里**只能有一个顶层文件夹**，**文件夹名就是插件名**；文件夹里放
+`__init__.py`、其他 `.py`、`README.md`（可选 `requirements.txt`）。根目录直接放文件、
+或出现第二个顶层文件夹都会被拒绝。**上传包按原样安装**（README 等不再被过滤）。
+
 **插件之间的依赖**：插件可以声明必需依赖（`requires`）与可选依赖
 （`optional_requires`）—— 装一个带依赖的插件时，装完的回执会直接告诉你
 「还缺谁、怎么补」，缺的装上后它会自动加载；被别人依赖着的插件**不能直接
-卸载/禁用**（会被拒绝，或按提示先处理使用者）。`/plugins` 按依赖顺序列出
+卸载/禁用**（会被拒绝，或按提示先处理使用者）。`/plugin list` 按依赖顺序列出
 插件，被依赖挡住的显示 `[⛔] 名字 —— 缺少 X`。插件侧写法见
 (../plugin-dev/01-overview.md#13-声明依赖别的插件必需--可选)。
 
 配置（`config.json → plugins.plugin_manager`）：`manifest_url`（换列表来源）、
 `token`（GitHub token，留空 = 匿名，每小时 60 次 API）、`timeout`、`proxy`、
-`manifest_cache_seconds`。身份建议用环境变量 `NCQQPY_GITHUB_TOKEN` /
-`GITHUB_TOKEN` 给，避免明文写进 `config.json`。
+`manifest_cache_seconds`；上传安装另有 `upload.*`（开关、大小/解压/文件数上限、
+等待窗口、本机目录白名单）与 `requirements.*`（是否自动装、超时、额外 pip 参数）。
+身份建议用环境变量 `NCQQPY_GITHUB_TOKEN` / `GITHUB_TOKEN` 给，避免明文写进
+`config.json`。
 
 ---

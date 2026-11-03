@@ -7,7 +7,7 @@
    必需/可选重复；
 2. **拓扑排序** —— 加载顺序「依赖在前」、卸载顺序「使用者在前」、环检测；
 3. **加载期行为** —— 必需依赖缺失/未启用 → 插件**不加载**（原因私聊超管、
-   `/plugins` 能看到）、依赖就位后自动加载；可选依赖缺失**不影响加载**；
+   管理器 API 能查到）、依赖就位后自动加载；可选依赖缺失**不影响加载**；
 4. **运行期行为** —— 自动启用依赖、`self.deps` 取实例、禁止卸载/禁用被依赖的
    插件、`force` 级联、重载依赖时级联重载使用者、`shutdown()` 逆序。
 
@@ -416,13 +416,11 @@ async def test_runtime(work: Path):
     # 成功的 load 会清空整张缓存（见 `_invalidate_deps`），之后就得靠实时判定
     check("坏声明被记下原因（判定缓存里）",
           "非法" in mgr6.blocked_reason("bad"), mgr6.blocked_reason("bad"))
-    # ⚠️ `blocked_reason()` 是「上次为什么被挡下」的**缓存**，成功的 load 会清空它
-    # （见 `_invalidate_deps`）—— 所以「好插件加载成功」之后不能拿它断言坏插件。
-    # 实时判定由 `/plugins` 用的 `dependency_verdict()` 提供。
+    # ⚠️ `blocked_reason()` 是「上次为什么被挡下」的**缓存**：`_invalidate_deps`
+    # 只清「本次变化的插件 + 依赖它的插件」，所以无关插件（bad）的缓存会保留。
     check("坏声明被拒（没进框架）", mgr6.get("bad") is None)
-    check("/plugins 里能看到它被拒与原因",
-          "bad" in _plugins_text(mgr6) and "非法" in _plugins_text(mgr6),
-          _plugins_text(mgr6))
+    check("没有声明可判定（dependency_verdict 返回 None）",
+          mgr6.dependency_verdict("bad") is None)
     check("坏声明私聊了超管", "非法" in notifier6.texts(), notifier6.texts())
 
     print("\n[11] 重载依赖 → 级联重载使用者")
@@ -447,21 +445,21 @@ async def test_runtime(work: Path):
     await mgr7.shutdown()
     check("全部卸载干净", mgr7.plugins == {}, str(list(mgr7.plugins)))
 
-    print("\n[13] /plugins 展示依赖与阻塞")
+    print("\n[13] 依赖判定 API（`/plugin list` 的数据来源）")
     pdir8 = work / "display"
     pdir8.mkdir(parents=True, exist_ok=True)
     write_plugin(pdir8, "app", requires=["store"], optional=["ai_chat"])
     mgr8, cmds8, _n8 = make_mgr(pdir8)
     await mgr8.load_all()
-    text = _plugins_text(mgr8)
-    check("/plugins 列出被阻塞的插件与原因",
-          "app" in text and "缺少 store" in text and "⛔" in text, text)
-
-
-def _plugins_text(mgr) -> str:
-    """跑一遍内置 `/plugins` 命令，拿到文本（它按依赖序展示 + 标出被阻塞的）。"""
-    handler = mgr.cmd_manager._commands.get("plugins")
-    return str(handler.func(None)) if handler is not None else ""
+    verdict = mgr8.dependency_verdict("app")
+    check("dependency_verdict 给出缺什么",
+          verdict is not None and not verdict.ok and "缺少 store" in verdict.reason(),
+          verdict.reason() if verdict is not None else "None")
+    check("可选依赖缺失不算失败（optional_missing 单独记）",
+          [s.name for s in verdict.optional_missing] == ["ai_chat"],
+          str([s.name for s in verdict.optional_missing]))
+    check("被挡下的插件在 blocked_reason 里有记录",
+          "store" in mgr8.blocked_reason("app"), mgr8.blocked_reason("app"))
 
 
 async def _raises(func) -> bool:

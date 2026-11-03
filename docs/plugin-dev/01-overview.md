@@ -69,7 +69,7 @@ class ReportPlugin(PluginBase):
 
 | 概念 | 语义 |
 |------|------|
-| `requires` | 必需依赖。缺失/**未启用**/版本不符 → 本插件**不加载**（不构造实例），原因私聊超管，`/plugins` 里显示 `[⛔] 名字 —— 缺少 X` |
+| `requires` | 必需依赖。缺失/**未启用**/版本不符 → 本插件**不加载**（不构造实例），原因私聊超管，`/plugin list` 里显示 `[⛔] 名字 —— 缺少 X` |
 | `optional_requires` | 可选依赖。缺失不算失败，只是装/卸时的提示；都装了则保证依赖先加载 |
 | `名字>=版本` | 版本要求（`>=` `>` `<=` `<` `==` `!=`，按数字段比较：`1.10 > 1.9`）。版本取对方声明的 `version`，可用 `provides_version` 覆盖 |
 | `self.deps` | 依赖访问代理：`get(name)` / `has(name)` / `enabled(name)` / `require(name)` / `names()`；也支持 `name in self.deps` |

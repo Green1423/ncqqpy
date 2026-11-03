@@ -308,6 +308,61 @@ def copy_plugin_tree(src: Path, dst: Path) -> int:
     return len(files)
 
 
+#: 上传包的**原样安装**模式：用户打包里有什么就装什么（README/文档/测试都留）。
+#: 只排掉工具产生的垃圾与记账文件 —— 它们不是包内容。
+PACKAGE_SKIP_DIRS = {"__pycache__", ".git", ".github", ".idea", ".vscode",
+                     "node_modules"}
+PACKAGE_SKIP_FILES = {".ds_store", "thumbs.db", META_FILE.lower()}
+
+
+def is_package_file(rel: str) -> bool:
+    """上传包里的这个相对路径要不要装：是内容就装，垃圾不装。"""
+    parts = Path(rel).parts
+    if not parts:
+        return False
+    if any(part in PACKAGE_SKIP_DIRS for part in parts[:-1]):
+        return False
+    name = parts[-1]
+    if name.lower() in PACKAGE_SKIP_FILES:
+        return False
+    if name.endswith((".pyc", ".pyo")):
+        return False
+    return True
+
+
+def collect_package_files(root: Path) -> dict[str, str]:
+    """上传包 → {相对路径: sha256}（保留 README/文档/测试，只排垃圾）。"""
+    out: dict[str, str] = {}
+    if not Path(root).exists():
+        return out
+    for path in sorted(Path(root).rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if not is_package_file(rel):
+            continue
+        try:
+            out[rel] = sha256_of(path)
+        except OSError:
+            continue
+    return out
+
+
+def copy_package_tree(src: Path, dst: Path) -> int:
+    """上传包**原样**拷进插件目录（返回文件数）。
+
+    与 `copy_plugin_tree` 的区别：不做「开发文件过滤」—— 用户上传的包长什么样，
+    `plugins/<名>/` 就长什么样（`README.md` 也不会被吞掉）。只排 `__pycache__`、
+    `.git`、`.DS_Store` 这类工具垃圾，避免把「打包噪音」带进运行目录。
+    """
+    files = [(Path(rel), src / rel) for rel in sorted(collect_package_files(src))]
+    for rel, source in files:
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return len(files)
+
+
 def plan_update(new_files: dict[str, str], old_files: dict[str, str],
                 local_files: dict[str, str]) -> FilePlan:
     """算出「上游新版本」相对「本地现状」该做什么。
@@ -547,7 +602,7 @@ class Installer:
                 "看起来不是 ncqqpy 插件包")
         declared, version = sniff_plugin_identity(root)
         if declared and declared != entry.name:
-            message = (f"仓库里声明的插件名是 {declared!r}，与列表文件里的 "
+            message = (f"包内声明的插件名是 {declared!r}，与要装的名字 "
                        f"{entry.name!r} 不一致")
             if allow_mismatch:
                 notes.append(message + "（已 force 继续）")
@@ -562,13 +617,16 @@ class Installer:
     # ---- 安装 / 更新 ----
 
     async def install(self, entry, *, force: bool = False, subdir: str = "",
-                      replace: bool = True, keep_local_extra: bool = True
-                      ) -> InstallResult:
-        """安装或更新一个插件。
+                      replace: bool = True, keep_local_extra: bool = True,
+                      before_swap=None) -> InstallResult:
+        """安装或更新一个插件（从 GitHub 源码包）。
 
         - `force=True`：忽略「用户手改过」的冲突，也忽略名字不一致；
         - `replace=False`：已存在就报错（`install` 子命令用，避免误覆盖）；
-        - 已存在且 `force` 时按「以本地为基准的更新」走，本地多余文件仍保留。
+        - 已存在且 `force` 时按「以本地为基准的更新」走，本地多余文件仍保留；
+        - `before_swap`：冲突检查通过、真正替换**之前**要跑的异步动作
+          （上传安装拿它装 requirements：装失败就不替换，旧版本原样可用）。
+          返回的字符串列表会并进 `InstallResult.notes`。
         """
         self.guard(entry.name)
         target = self.local_dir(entry.name)
@@ -585,10 +643,48 @@ class Installer:
 
         root, ref, archive_sha = await self.stage_async(entry, subdir=subdir)
         notes = self.verify(entry, root, allow_mismatch=force)
+        return await self._apply(
+            entry, root, ref=ref, archive_sha=archive_sha, force=force,
+            keep_local_extra=keep_local_extra, notes=notes,
+            source="manifest", before_swap=before_swap)
+
+    async def install_from_package(self, entry, root, *, archive_sha: str = "",
+                                   force: bool = False,
+                                   keep_local_extra: bool = True,
+                                   notes=None, source: str = "upload",
+                                   before_swap=None) -> InstallResult:
+        """从**已经解压好的目录**安装（上传 zip 走这条）。
+
+        下载、zip 校验、解压都在调用方（`main._run_upload` + `zips.py`）完成；
+        这里只做「冲突检查 → 原子替换 → 记账」，与 GitHub 安装共用同一套语义，
+        所以上传与更新不会出现两套「什么算冲突」的口径。
+        """
+        self.guard(entry.name)
+        return await self._apply(
+            entry, Path(root), ref="", archive_sha=archive_sha, force=force,
+            keep_local_extra=keep_local_extra, notes=list(notes or []),
+            source=source, before_swap=before_swap, preserve_layout=True)
+
+    async def _apply(self, entry, root: Path, *, ref: str, archive_sha: str,
+                     force: bool, keep_local_extra: bool, notes: list,
+                     source: str, before_swap=None,
+                     preserve_layout: bool = False) -> InstallResult:
+        """把「解压好的插件根」落到 `plugins/<name>/`（安装/更新共用）。
+
+        `preserve_layout=True`（上传 zip 用）：文件集合与拷贝都按**包原样**走 ——
+        用户包里的 `README.md`/文档/测试不会被过滤掉；GitHub 源码包仍按同步集
+        （过滤开发文件）。
+        """
+        target = self.local_dir(entry.name)
+        previous = self.effective_record(entry.name)
+        exists = target.is_dir()
+
+        collect = collect_package_files if preserve_layout else collect_files
+        copy_tree = copy_package_tree if preserve_layout else copy_plugin_tree
 
         old_files = dict(previous.files) if previous else {}
-        local_files = collect_files(target) if exists else {}
-        new_files = collect_files(root)
+        local_files = collect(target) if exists else {}
+        new_files = collect(root)
         plan = plan_update(new_files, old_files, local_files)
 
         if exists and plan.conflicts and not force:
@@ -606,6 +702,12 @@ class Installer:
                                  ref=ref, new_sha=previous.sha,
                                  version=previous.version,
                                  plan=plan, notes=notes)
+
+        # ---- 换目录之前要做的准备（上传安装用它装 requirements）----
+        if before_swap is not None:
+            extra = await before_swap()
+            if extra:
+                notes.extend(str(item) for item in extra if item)
 
         # ---- 组装新目录 ----
         # 以「本地现状」为基线（首次安装 = 空目录），再把仓库里参与同步的文件
@@ -632,7 +734,7 @@ class Installer:
                 victim = staged_target / rel
                 if victim.is_file():
                     victim.unlink()
-        copy_plugin_tree(root, staged_target)
+        copy_tree(root, staged_target)
 
         backup: Optional[Path] = None
         try:
@@ -647,7 +749,9 @@ class Installer:
 
         keep_data = bool(previous.keep_data if previous else entry.keep_data)
         record = self._build_record(entry, target, ref=ref, previous=previous,
-                                    keep_data=keep_data, sha_hint=archive_sha)
+                                    keep_data=keep_data, sha_hint=archive_sha,
+                                    source=source,
+                                    preserve_layout=preserve_layout)
         try:
             self.store.put(record)
         except OSError as exc:
@@ -663,9 +767,11 @@ class Installer:
 
     def _build_record(self, entry, root: Path, *, ref: str,
                       previous: Optional[InstalledPlugin], keep_data: bool,
-                      sha_hint: str = "") -> InstalledPlugin:
+                      sha_hint: str = "", source: str = "manifest",
+                      preserve_layout: bool = False) -> InstalledPlugin:
         """按「装好之后的插件目录」生成记账（含全部文件哈希）。"""
-        files = collect_files(root)
+        files = (collect_package_files if preserve_layout
+                 else collect_files)(root)
         name, version = sniff_plugin_identity(root)
         now = now_iso()
         sha = sha_hint
@@ -686,7 +792,7 @@ class Installer:
             installed_at=((previous.installed_at if previous else "") or now),
             updated_at=now,
             keep_data=keep_data,
-            source="manifest",
+            source=source,
             files=files,
         )
 
