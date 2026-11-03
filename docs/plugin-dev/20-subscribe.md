@@ -1,4 +1,4 @@
-# 二十、服务范围：只服务名单里的人
+# 二十、服务范围：订阅名单（`napcat.subscribe`）
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[渲染](19-render.md) · 下一章：[本地状态与清理](21-persist.md)
 
@@ -6,7 +6,7 @@
 问题不是「怎么用」，而是**「谁能用」**。答案是白名单：只服务配置里列出的群和
 QQ 号，其余一律回绝。
 
-这套判定收在框架的 **`napcat.scope`** 里，四个官方插件（`ai_chat`、`bupt_news`、
+这套判定收在框架的 **`napcat.subscribe`** 里，四个官方插件（`ai_chat`、`bupt_news`、
 `byrdocs`、`oj_bank`）共用同一份实现 —— 自己另写一份的后果是四条边界逐渐不一致：
 有的空名单放行、有的拒绝，有的把「机器人监听哪些群」当成服务范围。
 
@@ -24,10 +24,10 @@ QQ 号，其余一律回绝。
 
 ## 20.2 接进插件
 
-三步：配置模板里留两张名单、构造 `Scope`、在入口处判一次。
+三步：配置模板里留两张名单、构造 `Subscription`、在入口处判一次。
 
 ```python
-from napcat.scope import Scope, parse_ids
+from napcat.subscribe import Subscription, parse_ids
 
 class DemoPlugin(PluginBase):
     name = "demo"
@@ -38,8 +38,8 @@ class DemoPlugin(PluginBase):
             "binding": {"groups": [], "users": []},
         }
 
-    def _scope(self) -> Scope:
-        return Scope.of(self.config.get("binding"))
+    def _subscription(self) -> Subscription:
+        return Subscription.of(self.config.get("binding"))
 
     def check_access(self, event) -> bool:
         if event is None:
@@ -47,7 +47,7 @@ class DemoPlugin(PluginBase):
         uid = int(getattr(event, "user_id", 0) or 0)
         if self.perm.is_superuser(uid):
             return True                       # 防死锁：超管要能进来改名单
-        return self._scope().event_ok(event)
+        return self._subscription().event_ok(event)
 ```
 
 然后**三处共用**这一个判定，不要各写一份：
@@ -62,10 +62,10 @@ class DemoPlugin(PluginBase):
 
 | 调用 | 返回 | 用途 |
 |------|------|------|
-| `Scope.of(binding)` | `Scope` | 从 `{"groups": [...], "users": [...]}` 建；不是 dict 时按空名单处理 |
-| `scope.group_ok(group_id)` | `bool` | 这个群是否开通（群聊与群小窗都用它） |
-| `scope.user_ok(user_id)` | `bool` | 这个人的私聊是否开通 |
-| `scope.event_ok(event)` | `bool` | 按事件类型自动选上面两个之一（`None` 事件放行） |
+| `Subscription.of(binding)` | `Subscription` | 从 `{"groups": [...], "users": [...]}` 建；不是 dict 时按空名单处理 |
+| `subscription.group_ok(group_id)` | `bool` | 这个群是否开通（群聊与群小窗都用它） |
+| `subscription.user_ok(user_id)` | `bool` | 这个人的私聊是否开通 |
+| `subscription.event_ok(event)` | `bool` | 按事件类型自动选上面两个之一（`None` 事件放行） |
 | `parse_ids(raw)` | `set[int]` | 名单解析：只收正整数 |
 
 `event_ok` **不含**超管豁免 —— 那要 `PermissionManager`，由调用方在更外层判。
@@ -95,7 +95,7 @@ class DemoPlugin(PluginBase):
 落地方式就是 `check_access` 里多一个分支，仍走同一个入口（不要另开一条命令路径）：
 
 ```python
-if self._scope().user_ok(uid):
+if self._subscription().user_ok(uid):
     return True, ""
 invited = self._invited_session_of(uid)      # 当前焦点是不是「他被邀请」的会话
 if invited is not None:

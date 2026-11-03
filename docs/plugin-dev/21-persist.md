@@ -1,6 +1,6 @@
 # 二十一、本地状态与清理
 
-> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[服务范围](20-scope.md)
+> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[服务范围](20-subscribe.md)
 
 插件经常需要在磁盘上留下两类东西：
 

@@ -32,8 +32,8 @@
     # sqlite ORM
     from napcat.store import Database, Model, CharField
 
-    # 服务范围白名单（群 / 用户；四个内置插件共用同一口径）
-    from napcat.scope import Scope, parse_ids
+    # 订阅名单（群 / 用户；四个官方插件共用同一口径）
+    from napcat.subscribe import Subscription, parse_ids
 
     # 本地 JSON 状态（原子写）与目录清理
     from napcat.persist import read_json, write_json, prune_keep
@@ -188,7 +188,8 @@ _LEGACY = {'ApiClient': ['api', 'ApiClient'],
 _SUBMODULES = {
     "api", "client", "command", "config", "deps", "errors", "events",
     "file_manager", "launcher", "message", "models", "permission", "persist",
-    "plugin", "qr_text", "registry", "scope", "store", "watchdog",
+    "plugin", "qr_text", "registry", "scope", "store", "subscribe",
+    "watchdog",
 }
 
 

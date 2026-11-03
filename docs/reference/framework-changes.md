@@ -9,11 +9,11 @@
 
 | 模块 | 内容 | 用法 |
 |------|------|------|
-| `napcat.scope` | `Scope`（群/用户白名单判定）、`parse_ids`（名单解析） | [服务范围](../plugin-dev/20-scope.md) |
+| `napcat.subscribe` | `Subscription`（群/用户订阅判定）、`parse_ids`（名单解析） | [服务范围](../plugin-dev/20-subscribe.md) |
 | `napcat.persist` | `read_json` / `write_json`（原子 JSON）、`prune_keep` / `prune_unreferenced`（目录清理） | [本地状态与清理](../plugin-dev/21-persist.md) |
 
 两个模块都已登记进 `napcat._SUBMODULES`：`import napcat` 之后可用
-`napcat.scope.Scope` / `napcat.persist.write_json` 按需加载。
+`napcat.subscribe.Subscription` / `napcat.persist.write_json` 按需加载。
 
 ## 2. 新增与变更的公开 API
 
@@ -34,6 +34,7 @@
 |------|------|-----------|
 | 插件发现跳过 `.` 开头的目录 | `plugins/.trash`、安装中的 `plugins/.new-<名>` 不会再被当成插件加载 | 无（若你依赖过这种目录名做插件，改成不以 `.` 开头） |
 | `PluginBase.stop_command(name)` 回收别名 | 删除命令时它的别名条目一起消失（走 `CommandManager.unregister`），不会再出现「命令没了、别名还能用」 | 无 |
+| `napcat.scope` 改名为 `napcat.subscribe`：`Scope` → `Subscription` | 判定语义不变（群/小窗按来源群、私聊按用户、空名单=谁都不用、超管豁免）。老名字保留为**兼容别名**（`napcat/scope.py` 转发到新模块） | 插件把 `from napcat.scope import Scope` 改成 `from napcat.subscribe import Subscription`；别名会在所有插件改用新名后删除 |
 | **定时任务 API 收敛**：删掉 `PluginBase.stop_timer` / `pause_timer` / `resume_timer` / `cancel_schedule` | 这 4 个方法只是 `self.timer` 的同名转发（原来还有两个名字做同一件事）。现在**注册**用 `self.schedule` / `self.schedule_at`（带归属，卸载自动取消），**管理**用 `self.timer.cancel/pause_timer/resume_timer` | 把 `self.stop_timer(x)` 改成 `self.timer.cancel(x)`、`self.pause_timer(x)` 改成 `self.timer.pause_timer(x)`、`self.cancel_schedule(x)` 改成 `self.timer.cancel(x)` |
 | `self.schedule` / `self.schedule_at` 补 `description` 参数 | 插件注册的定时任务现在能在 `/timers` 里显示说明 | 无 |
 | `self.schedule` 的排程文档修正 | 语义一直是**固定频率**（按绝对时刻、耗时不计入周期）；原文档写成「本轮执行结束再计时」，与实现不符 | 无（按固定频率使用即可） |
@@ -49,7 +50,7 @@
 ## 4. 服务范围口径统一
 
 四个官方插件（`ai_chat` / `bupt_news` / `byrdocs` / `oj_bank`）现在共用
-[`napcat.scope`](../plugin-dev/20-scope.md) 的判定：
+[`napcat.subscribe`](../plugin-dev/20-subscribe.md) 的判定：
 
 | 维度 | 统一后的行为 |
 |------|-------------|
@@ -73,7 +74,7 @@
 1. **白名单必须显式配置**：`binding`（`bupt_news` 是 `targets`）为空 = 谁都不能用。
    升级后先确认每个插件的名单，或用超管命令各加一条；
 2. **移除 `binding.empty_means`**（可选清理，不影响运行）；
-3. **插件与框架同版本发布**：官方插件现在依赖 `napcat.scope` / `napcat.persist`
+3. **插件与框架同版本发布**：官方插件现在依赖 `napcat.subscribe` / `napcat.persist`
    （与 `napcat.render` 同一约定：插件仓库按框架版本发布）；
 4. **确认超管豁免符合预期**：`ai_chat` / `oj_bank` 的超管现在能进入未开通的群；
 5. `plugin_manager` 的「已装过」提示改走私聊回执，排障时看后台消息而不是命令回复。
@@ -83,7 +84,7 @@
 改动涉及的框架仓套件（从仓库根跑）：
 
 ```bash
-./venv-arm/bin/python -B tests/test_scope.py          # 服务范围口径
+./venv-arm/bin/python -B tests/test_subscribe.py      # 订阅名单口径
 ./venv-arm/bin/python -B tests/test_persist.py        # JSON 原子写 / 目录清理
 ./venv-arm/bin/python -B tests/test_plugin_errors.py  # 生命周期缺陷回归
 ./venv-arm/bin/python -B tests/test_plugin_deps.py    # 依赖图与加载顺序
