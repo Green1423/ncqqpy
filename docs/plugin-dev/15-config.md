@@ -94,7 +94,7 @@ class MyPlugin(PluginBase):
 
 > 运行期想主动补一次（例如运维删了键之后）用
 > `self.config.fill_defaults(self.config_template())`，它返回
-> `ConfigFill(filled, conflicts)`；`/aichat config` 就是这么做的。
+> `ConfigFill(filled, conflicts)`；插件启动时（`PluginBase._seed_config`）就是这么做的。
 
 ## 15.4 ConfigManager API
 

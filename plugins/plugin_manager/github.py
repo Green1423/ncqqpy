@@ -29,8 +29,6 @@ UA = "ncqqpy-plugin-manager"
 
 #: 仓库源码包地址（tag / 分支 / commit 都能填进 `{ref}`）
 CODELOAD = "https://codeload.github.com/{repo}/tar.gz/{ref}"
-#: GitHub REST：查某条 ref 的最新提交
-API_COMMIT = "https://api.github.com/repos/{repo}/commits/{ref}"
 
 
 class GithubError(PluginExternalError):

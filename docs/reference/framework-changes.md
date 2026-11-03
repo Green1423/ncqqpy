@@ -48,7 +48,7 @@
 
 ## 4. 服务范围口径统一
 
-四个内置插件（`ai_chat` / `bupt_news` / `byrdocs` / `oj_bank`）现在共用
+四个官方插件（`ai_chat` / `bupt_news` / `byrdocs` / `oj_bank`）现在共用
 [`napcat.scope`](../plugin-dev/20-scope.md) 的判定：
 
 | 维度 | 统一后的行为 |
@@ -73,7 +73,7 @@
 1. **白名单必须显式配置**：`binding`（`bupt_news` 是 `targets`）为空 = 谁都不能用。
    升级后先确认每个插件的名单，或用超管命令各加一条；
 2. **移除 `binding.empty_means`**（可选清理，不影响运行）；
-3. **插件与框架同版本发布**：内置插件现在依赖 `napcat.scope` / `napcat.persist`
+3. **插件与框架同版本发布**：官方插件现在依赖 `napcat.scope` / `napcat.persist`
    （与 `napcat.render` 同一约定：插件仓库按框架版本发布）；
 4. **确认超管豁免符合预期**：`ai_chat` / `oj_bank` 的超管现在能进入未开通的群；
 5. `plugin_manager` 的「已装过」提示改走私聊回执，排障时看后台消息而不是命令回复。

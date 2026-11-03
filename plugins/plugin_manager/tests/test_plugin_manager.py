@@ -46,7 +46,7 @@ from napcat.file_manager import FileManager
 from napcat.client import GroupBinding
 from napcat.models import MessageEvent, Sender
 from napcat.permission import PermissionManager
-from napcat.plugin import PluginManager, PluginBase
+from napcat.plugin import PluginManager
 from napcat.config import ConfigManager                             # noqa: E402
 
 PLUGIN_SRC = Path(__file__).resolve().parents[1]   # plugins/plugin_manager
