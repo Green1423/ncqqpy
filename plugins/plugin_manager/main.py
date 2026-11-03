@@ -981,7 +981,7 @@ class PluginManagerPlugin(PluginBase):
 
         # `/plugin upload` 之后「下一条私聊文件」：命令事件只带自己的消息，
         # 用户通常先发命令再发文件，所以用一个私聊消息监听把文件接住
-        # （与 oj_bank 的 pending submit 同一套思路）。
+        # （与「先回执、后跑长任务」的交互同一套思路）。
         @self.on_message(private=True, hid=f"{self.name}.upload_inbox",
                          description="上传 zip 安装插件（/plugin upload 之后）")
         async def on_upload_inbox(event) -> None:
@@ -1301,7 +1301,7 @@ class PluginManagerPlugin(PluginBase):
         return {name: i for i, name in enumerate(sorted(names))}
 
     def _dependency_tag(self, name: str) -> str:
-        """`（依赖 store · 可选 ai_chat）`；没有依赖返回空串。"""
+        """`（依赖 foo · 可选 bar）`；没有依赖返回空串。"""
         report = self.dependency_report(name)
         bits = []
         if report.get("required"):

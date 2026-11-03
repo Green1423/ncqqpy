@@ -1080,13 +1080,10 @@ _SIZE_SCRIPT = """<script>
 #: 自带一份之后公式排版不再依赖网络；CDN 只作为兜底。
 KATEX_VERSION = "0.16.9"
 _CDN_BASE = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist"
-#: KaTeX 资源目录：**框架自带优先**，其次插件里那份（过渡期兼容）。
-#: 用列表而不是单一常量：资源可以放在任何一层，这里按顺序找第一个有
-#: `katex.min.js` 的目录；插件也可以 `register_katex_dir()` 追加。
+#: KaTeX 资源目录：**框架自带**（`napcat/katex/`）。
+#: 框架不认识任何插件的目录；需要换资源位置时用 `register_katex_dir()` 追加。
 _KATEX_DIRS = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "katex"),
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                 "plugins", "ai_chat", "katex"),
 ]
 
 

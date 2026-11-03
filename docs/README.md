@@ -1,8 +1,8 @@
 # ncqqpy 文档
 
-本目录是 ncqqpy 的**框架与插件开发文档**，按职责分成六个区：用框架、写插件、插件手册、
-参考、归档、贡献规范。框架**只内置 `plugin_manager`**；其余插件都是官方插件，各自独立
-仓库发布，手册见下文「插件手册」。
+本目录是 ncqqpy 的**框架与插件开发文档**，按职责分成五个区：用框架、写插件、参考、
+归档、贡献规范。文档只覆盖框架本身与**内置插件 `plugin_manager`**；其余插件是独立仓库
+发布的官方插件，手册随各自仓库走，不在这里收录。
 
 每篇文档开头都有「上级 / 上一章 / 下一章」导航。
 
@@ -13,7 +13,6 @@ docs/
 ├── README.md              # 本页：总索引与阅读路径
 ├── guide/                 # 用框架：配置 → 消息 → 事件 → API → 命令 → 权限 …
 ├── plugin-dev/            # 写插件：生命周期 → 资源 → 命令/Schema → 存储 → 错误 …
-├── plugins/               # 插件手册（发布时同步到各插件仓）
 ├── reference/             # 参考：sqlite ORM、看门狗、DSH 内部机制
 ├── archive/               # 历史设计/实施计划（只读，不再维护）
 └── contributing/          # 贡献规范：docstring / 测试与发布
@@ -28,7 +27,7 @@ docs/
 | 写命令、帮助、权限 | [命令系统](guide/06-commands.md) → [权限管理](guide/07-permissions.md) |
 | 写插件 | [插件开发](plugin-dev/README.md)（先看 [插件概述](plugin-dev/01-overview.md)） |
 | 存结构化数据 | [数据持久化](plugin-dev/09-store.md) + [store 参考](reference/store.md) |
-| 用官方插件 | [ai_chat](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/README.md) · [bupt_news](https://github.com/Green1423/ncqqpy-plugin-bupt-news/blob/main/docs/bupt-news/README.md) · [byrdocs](https://github.com/Green1423/ncqqpy-plugin-byrdocs/blob/main/docs/byrdocs/README.md) |
+| 看有哪些插件 | 运行时 `/plugin list`，或 [插件列表仓库](https://github.com/Green1423/ncqqpy-plugins) |
 | 运维（断线重启） | [看门狗](reference/watchdog/README.md) |
 | 改框架本身 | [docstring 规范](contributing/docstrings.md) + [DSH 内部机制](reference/dsh-internals/README.md) |
 
@@ -36,7 +35,6 @@ docs/
 
 - 使用框架：[guide/README.md](guide/README.md)
 - 写插件：[plugin-dev/README.md](plugin-dev/README.md)
-- 插件手册：[plugins/README.md](plugins/README.md)
 - 参考：[reference/README.md](reference/README.md)
 - 归档：archive/README.md
 - 贡献规范：[contributing/README.md](contributing/README.md)
@@ -84,19 +82,17 @@ docs/
 | [服务范围](plugin-dev/20-scope.md) | 20.1 四条规矩 · 20.2 接进插件 · 20.3 判定 API · 20.4 三种上下文 · 20.5 按会话例外 · 20.6 名单维护 |
 | [本地状态与清理](plugin-dev/21-persist.md) | 21.1 JSON 状态 · 21.2 按数量清理 · 21.3 按引用清理 · 21.4 怎么选 · 21.5 与 sqlite 的边界 |
 
-## 三、插件手册（`plugins/`）
+## 三、插件（`plugins/`）
 
-框架**只内置 `plugin_manager`** —— 它随框架启动，负责装卸其他插件。下面其余都是
-**官方插件**：各自独立仓库发布，用 `/plugin install <名>` 安装，或手动放进 `plugins/`。
+框架**只内置 `plugin_manager`** —— 它随框架启动，负责装卸其他插件：
 
-| 插件 | 一句话 | 文档 |
-|------|--------|------|
-| `ai_chat` | 多会话 AI 对话、消息包装、上下文压缩、内置工具 | [手册](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/README.md) |
-| `bupt_news` | 北邮校内通知同步、免打扰早报、短 ID 检索、DeepSeek 摘要 | [手册](https://github.com/Green1423/ncqqpy-plugin-bupt-news/blob/main/docs/bupt-news/README.md) |
-| `byrdocs` | BYR Docs 资料检索与下载（搜索编号 / 翻页 / 取文件 / 白名单） | [手册](https://github.com/Green1423/ncqqpy-plugin-byrdocs/blob/main/docs/byrdocs/README.md) |
-| `oj_bank` | 本地题库与判题：洛谷抓题 / AI 搜题入库 / 出图 / 10 组卡人测试点 / 题组 | [手册](https://github.com/Green1423/ncqqpy-oj-bank/blob/main/docs/oj-bank/README.md) |
-| `plugin_manager` | **内置** · 超管私聊装卸插件（总览 `/plugin list` · GitHub 安装 · 上传 zip + 自动装 requirements · 回收站、校验） | [README](../plugins/plugin_manager/README.md) |
-| `essential` | 群管理（`/ban` `/kick` `/groupinfo`）+ 问候 + 定时撤回 | 示例章节见 [插件开发](plugin-dev/README.md) |
+| 内置插件 | 说明 |
+|------|------|
+| `plugin_manager` | 超管私聊装卸插件（`/plugin list` 总览 · GitHub 安装 · 上传 zip + 自动装 requirements · 回收站、校验）· [说明](../plugins/plugin_manager/README.md) |
+
+其余插件都是**独立仓库发布的官方插件**：可用清单由 `plugin_manager` 的列表文件维护
+（[ncqqpy-plugins](https://github.com/Green1423/ncqqpy-plugins)），运行时用 `/plugin list`
+查看与安装。每个插件的手册、配置、安全边界都随它自己的仓库发布，框架文档不重复维护。
 
 ## 四、参考（`reference/`）
 
@@ -105,8 +101,7 @@ docs/
 | [sqlite ORM](reference/store.md) | `napcat.store`：模型、字段、查询、事务、迁移边界 |
 | [NapCat API 覆盖](reference/napcat-api.md) | `ApiClient` 对官方 178 个 action 的覆盖表与字段约定 |
 | [看门狗](reference/watchdog/README.md) | 断线自动重启 + 扫码恢复的唯一状态机、配置与排障 |
-| [DSH 内部机制](reference/dsh-internals/README.md) | DSH 的消息投影、会话日志、系统提示与上下文压缩（`ai_chat` 的语义依据） |
-| [ai_chat 实现参考](reference/ai-chat/README.md) | Markdown 渲染、持久化、测试、import 纪律、框架改动、DSH 映射 |
+| [DSH 内部机制](reference/dsh-internals/README.md) | DSH 的消息投影、会话日志、系统提示与上下文压缩（`ai_chat` 这类对话插件的语义依据） |
 | [框架变更记录](reference/framework-changes.md) | 插件系统 / 本地状态 / 服务范围的对外变更、影响与升级检查清单 |
 
 ## 五、归档（`archive/`）

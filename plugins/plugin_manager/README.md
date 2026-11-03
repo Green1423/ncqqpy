@@ -59,10 +59,10 @@
 
 ```
 /plugin list                     # 看有什么
-/plugin install ai_chat          # 装
+/plugin install demo_plugin      # 装
 /plugin check                    # 看哪些能更新
 /plugin update all               # 一起更新
-/plugin uninstall ai_chat        # 卸载（data/ 留在原地）
+/plugin uninstall demo_plugin    # 卸载（data/ 留在原地）
 ```
 
 ```
@@ -108,7 +108,7 @@
 ### 1.4 上传 zip 安装（不经 GitHub）
 
 把插件包打成一个 zip，在**私聊**里发上来即可（不动 GitHub、不需要列表文件）。
-交互照 `oj_bank` 的 `/oj submit` 设计：**格式错误当场回你，慢动作（装依赖/
+交互是「异步任务 + 回执」：**格式错误当场回你，慢动作（装依赖/
 替换/重载）才进后台**。
 
 ```
@@ -119,7 +119,7 @@
 
 zip 可以附在**同一条消息**里、发完命令后**再发**，或者**引用**一条文件消息
 （来源优先级与 submit 一致：同消息 → 引用 → 等下一发）。文件获取沿用
-`oj_bank` 的同一套做法（`fileintake.py`）：框架文件 API 优先
+统一走 `fileintake.py`：框架文件 API 优先
 （`FileManager` / `ApiClient` 的流式下载），拿不到再退 http 直连或本机路径
 （本机路径限定在 `upload.local_roots` 白名单内，默认是 NapCat 的缓存目录）。
 
@@ -197,8 +197,8 @@ zip 可以附在**同一条消息**里、发完命令后**再发**，或者**引
   "updated": "2026-10-10",
   "plugins": [
     {
-      "name": "essential",
-      "repo": "Green1423/ncqqpy-plugin-essential",
+      "name": "demo_plugin",
+      "repo": "owner/ncqqpy-plugin-demo",
       "ref": "main",
       "version": "1.2.0",
       "description": "群管理基础命令 + 入群问候",

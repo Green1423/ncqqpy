@@ -23,7 +23,7 @@ class MyPlugin(PluginBase):
         @self.register_command("disable_me", permission="admin")
         async def cmd_disable(packet):
             self.unregister_command("disable_me")
-            self.cancel_schedule("hourly")
+            self.timer.cancel("hourly")
             return "命令和定时任务已卸载"
 
         @self.schedule(3600, name="hourly")

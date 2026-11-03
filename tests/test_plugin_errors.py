@@ -398,6 +398,13 @@ async def test_plugin_manager_defects():
           await mgr5.reload("renf") is False)
     check("此时插件处于「已加载但未启用」", mgr5.get("renf") is not None
           and mgr5.get("renf").enabled is False)
+
+    # 修好之后，下一次热重载要把它拉回「启用」态 —— 否则一次临时的 on_enable
+    # 报错会让插件永久停用（文件改好了，watcher 也只加载不启用）。
+    write_plugin(pdir5, "renf", body="    async def on_enable(self): ...\n")
+    check("修好后再次 reload → 自动恢复到启用态",
+          await mgr5.reload("renf") is True
+          and mgr5.get("renf").enabled is True)
     timer5.stop()
 
     # (d) unload 清理整棵模块子树（以前只 pop 父模块，改子模块不生效）
@@ -472,14 +479,20 @@ async def test_plugin_manager_defects():
     check("stop_command 连别名一起回收（旧实现只 pop 主名）",
           cmds6.find_command("owned") is None and cmds6.find_command("ow") is None)
 
-    check("stop_timer 对不存在的任务返回 False（旧实现恒 True）",
-          p6.stop_timer("never_existed") is False)
+    # 定时任务只有一套 API：注册用插件层 `self.schedule`（带归属），
+    # 管理用 `self.timer.cancel/pause_timer/resume_timer`。
+    check("timer.cancel 对不存在的任务返回 False",
+          p6.timer.cancel("never_existed") is False)
+
     async def _tick():
         return None
-    timer6.every(3600, name="owned.tick")(_tick)
-    p6._timers.append("owned.tick")
-    check("stop_timer 对存在的任务返回 True 并清掉记账",
-          p6.stop_timer("owned.tick") is True and "owned.tick" not in p6._timers)
+    p6.schedule(3600, name="owned.tick")(_tick)
+    check("self.schedule 登记了任务归属", "owned.tick" in p6._timers)
+    check("timer.cancel 对存在的任务返回 True 并清掉任务",
+          p6.timer.cancel("owned.tick") is True
+          and "owned.tick" not in timer6._metas)
+    p6._off_own_timers()
+    check("_off_own_timers 回收本插件的全部任务", not timer6._metas, str(timer6._metas))
 
     # 安装中的 `.new-<名>` 与回收站 `.trash` 都带 __init__.py：不能当成插件
     (pdir6 / ".new-owner").mkdir()

@@ -11,8 +11,8 @@
       "updated": "2026-10-10",
       "plugins": [
         {
-          "name": "bupt_news",
-          "repo": "Green1423/ncqqpy-plugin-bupt-news",
+          "name": "demo_plugin",
+          "repo": "owner/ncqqpy-plugin-demo",
           "ref": "main",
           "description": "北邮校内通知推送",
           "version": "1.0.0",

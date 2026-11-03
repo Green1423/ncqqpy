@@ -30,8 +30,8 @@ from napcat.markdown import (markdown_to_html, to_plain_text,
 所有文本先转义再拼标签。处理顺序也是边界：先把行内代码/公式摘成占位符，
 再转义，最后还原 —— 顺序颠倒任何一个都会出注入或错排版。
 
-KaTeX 资源查找顺序：`register_katex_dir()` 追加的目录 → `napcat/katex/` →
-`plugins/ai_chat/katex/`（过渡期兼容）→ CDN。
+KaTeX 资源查找顺序：`register_katex_dir()` 追加的目录 → `napcat/katex/`（框架自带）
+→ CDN。框架不依赖任何插件的目录。
 
 ## 19.2 `napcat.render` —— Chromium 无头渲染
 

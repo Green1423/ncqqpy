@@ -34,9 +34,9 @@
 |------|------|-----------|
 | 插件发现跳过 `.` 开头的目录 | `plugins/.trash`、安装中的 `plugins/.new-<名>` 不会再被当成插件加载 | 无（若你依赖过这种目录名做插件，改成不以 `.` 开头） |
 | `PluginBase.stop_command(name)` 回收别名 | 删除命令时它的别名条目一起消失（走 `CommandManager.unregister`），不会再出现「命令没了、别名还能用」 | 无 |
-| `PluginBase.stop_timer(name)` 如实回报 | 任务不存在时返回 `False`（原来恒为 `True`）；同时清掉实例的任务记账 | 依赖返回值做提示的地方会变准 |
-| `PluginBase.cancel_schedule(name)` 与 `stop_timer` 同义 | 两个名字一个实现，返回值也一致 | 无 |
-| `pause_timer` / `resume_timer` 去掉 `hasattr` 兜底 | `TimerManager` 一定有这两个方法，防御分支不会命中 | 无 |
+| **定时任务 API 收敛**：删掉 `PluginBase.stop_timer` / `pause_timer` / `resume_timer` / `cancel_schedule` | 这 4 个方法只是 `self.timer` 的同名转发（原来还有两个名字做同一件事）。现在**注册**用 `self.schedule` / `self.schedule_at`（带归属，卸载自动取消），**管理**用 `self.timer.cancel/pause_timer/resume_timer` | 把 `self.stop_timer(x)` 改成 `self.timer.cancel(x)`、`self.pause_timer(x)` 改成 `self.timer.pause_timer(x)`、`self.cancel_schedule(x)` 改成 `self.timer.cancel(x)` |
+| `self.schedule` / `self.schedule_at` 补 `description` 参数 | 插件注册的定时任务现在能在 `/timers` 里显示说明 | 无 |
+| `self.schedule` 的排程文档修正 | 语义一直是**固定频率**（按绝对时刻、耗时不计入周期）；原文档写成「本轮执行结束再计时」，与实现不符 | 无（按固定频率使用即可） |
 | 加载失败 / 启用失败 / 卸载共用同一套拆卸 | 三条路径都会撤销该插件注册的**命令、技能、工具、事件处理器、定时任务与连接回调**；失败后不再留残留 | 无（插件里不必再自己写清理） |
 | 内置 `/plugins` 命令移除，并入 `plugin_manager` 的 `/plugin list` | `/plugins` 改为 `plugin_manager` 注册的**等价别名**（同一渲染器、`superuser + private`）；框架不再提供「任何人可用」的插件列表 | 需要普通用户看插件列表的场景没有了；受限用户请改用服务范围内的功能 |
 | `plugin_manager` 的 `/plugin list` 合并原 `/plugins` | 一次列出「已安装（✓/✗/⛔ + 版本 + 依赖 + 来源）」与「可安装」；`/plugins` 输出与它完全一致 | 无（脚本里解析输出的话注意分段标题变了） |

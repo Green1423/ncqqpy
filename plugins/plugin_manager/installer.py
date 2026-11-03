@@ -590,8 +590,8 @@ class Installer:
     def verify(self, entry, root: Path, *, allow_mismatch: bool = False) -> list[str]:
         """校验解压出来的确实是这个插件（入口文件 + `name` 声明）。
 
-        返回告警列表；不一致时直接抛错 —— 装错目录（把 ai_chat 装进
-        bupt_news）比装不上更难排查。
+        返回告警列表；不一致时直接抛错 —— 装错目录（把 A 插件装进
+        B 插件的目录）比装不上更难排查。
         """
         notes: list[str] = []
         if not root.is_dir():

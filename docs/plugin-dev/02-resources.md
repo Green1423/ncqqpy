@@ -30,9 +30,8 @@
 | `self.off_all_events()` | 取消注册本插件全部事件 |
 | `self.register_command(name, **kwargs)` | 注册命令 |
 | `self.unregister_command(name)` | 取消注册命令 |
-| `self.schedule(seconds, name=...)` | 注册周期定时任务 |
-| `self.schedule_at("HH:MM", name=...)` | 注册每日定时任务 |
-| `self.cancel_schedule(name)` | 取消指定名称的定时任务 |
+| `self.schedule(seconds, name=..., description=...)` | 注册固定频率定时任务（**带归属**，卸载时自动取消） |
+| `self.schedule_at("HH:MM", name=..., description=...)` | 注册每日定时任务（同样带归属） |
 | `self.bind_group(gid)` | 绑定群 |
 | `self.unbind_group(gid)` | 解绑群 |
 | `self.is_group_bound(gid)` | 检查群是否已绑定 |
@@ -43,9 +42,8 @@
 | `self.resume_event(hid)` | 恢复指定事件监听器 |
 | `self.stop_command(name)` | 删除指定命令（连它的别名一起，与 `/stop command` 同一条路径） |
 | `self.pause_command(name)` | 启用/禁用命令（toggle，禁用后返回"命令不存在"） |
-| `self.stop_timer(name)` | 取消指定定时任务（返回它原本是否存在） |
-| `self.pause_timer(name)` | 暂停指定定时任务 |
-| `self.resume_timer(name)` | 恢复指定定时任务 |
+| `self.timer.cancel(name)` | 取消指定定时任务（返回它原本是否存在） |
+| `self.timer.pause_timer(name)` / `self.timer.resume_timer(name)` | 暂停 / 恢复指定定时任务 |
 
 > **框架自动回收的范围**（不用自己写清理代码）：
 > `unload()` 时会撤销本插件注册的**全部**事件处理器、**定时任务**与**命令**

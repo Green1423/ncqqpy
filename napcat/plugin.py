@@ -174,7 +174,7 @@ def discover_plugins(plugin_dir) -> list[str]:
     不挡的话 watcher 会把它当成一个插件去加载。
 
     这是「目录里有哪些插件」的**唯一实现**：框架的 watcher/加载器和
-    `plugin_manager` 都调它，两边判定不会再漂移。
+    插件管理器也调它，两边判定不会再漂移。
     """
     root = Path(plugin_dir)
     names: list[str] = []
@@ -670,34 +670,50 @@ class PluginBase(ABC):
             self.event_bus.off(event_type, handler)
         self._handlers.clear()
 
-    def schedule(self, seconds: float, name: str = None):
-        """注册固定间隔的定时任务。
+    def schedule(self, seconds: float, name: str = None,
+                 description: str = ""):
+        """注册固定频率的定时任务。
 
-        间隔从**本轮执行结束**开始计时；执行超过间隔会跳过错过的轮次，不会堆积。
+        按**绝对时刻**排程：任务自身的执行耗时不计入周期，落后时跳过错过的轮次
+        （不补跑、不堆积）。`seconds` 必须大于 0，注册时就校验。
+
+        这是**插件里注册定时任务的唯一入口** —— 比 `self.timer.every()` 多一件事：
+        记下任务归属，`on_disable` / 卸载 / 加载失败时自动取消（直接用
+        `self.timer.every()` 注册的任务框架不知道属于谁，插件走了任务还在跑）。
 
         Args:
             seconds: 间隔秒数，必须大于 0。
             name: 任务名（默认取函数名）；同名任务覆盖旧任务。
+            description: 说明（`/timers` 列表展示）。
 
         Returns:
-            装饰器；被装饰函数不接收参数。"""
+            装饰器；被装饰函数不接收参数。
+        """
         def decorator(func):
             task_name = name or func.__name__
             self._timers.append(task_name)
-            return self.timer.every(seconds, name=task_name)(func)
+            return self.timer.every(seconds, name=task_name,
+                                    description=description)(func)
         return decorator
 
-    def schedule_at(self, time_str: str, name: str = None):
-        """注册每日定时任务（同样由框架在卸载时回收）。"""
+    def schedule_at(self, time_str: str, name: str = None,
+                    description: str = ""):
+        """注册每日定时任务（`"08:00"`，本机时区；同样由框架在卸载时回收）。
+
+        Args:
+            time_str: 每天的执行时刻 `HH:MM`。
+            name: 任务名（默认取函数名）；同名任务覆盖旧任务。
+            description: 说明（`/timers` 列表展示）。
+
+        Returns:
+            装饰器；被装饰函数不接收参数。
+        """
         def decorator(func):
             task_name = name or func.__name__
             self._timers.append(task_name)
-            return self.timer.at(time_str, name=task_name)(func)
+            return self.timer.at(time_str, name=task_name,
+                                 description=description)(func)
         return decorator
-
-    def cancel_schedule(self, name: str) -> bool:
-        """取消指定名称的定时任务（`stop_timer` 的别名，行为与它完全一致）。"""
-        return self.stop_timer(name)
 
     @property
     def config(self):
@@ -717,8 +733,8 @@ class PluginBase(ABC):
         """管理本插件的 `PluginManager`（框架注入；手搓宿主时为 `client.plugins`）。
 
         「管理器在哪」只有这一份解析：先看加载时注入的 `_manager`，再退回
-        `client.plugins`。`_DepsProxy`、`dependency_check()` 和 `plugin_manager`
-        以前各写了一遍，其中一处优先级还是反的 —— 同一件事两个答案。
+        `client.plugins`。依赖代理、`dependency_check()` 和插件管理器各自写过一遍，
+        其中一处优先级还是反的 —— 同一件事两个答案。
         """
         own = getattr(self, "_manager", None)
         if own is not None:
@@ -815,20 +831,6 @@ class PluginBase(ABC):
         """启用/禁用命令（toggle）。禁用后调用等于「命令不存在」。"""
         return self.cmds.set_disabled(name)
 
-    def stop_timer(self, name: str) -> bool:
-        """取消指定定时任务（返回它原本是否存在）。"""
-        found = self.timer.cancel(name)
-        if name in self._timers:
-            self._timers.remove(name)
-        return found
-
-    def pause_timer(self, name: str) -> bool:
-        """暂停指定定时任务"""
-        return self.timer.pause_timer(name)
-
-    def resume_timer(self, name: str) -> bool:
-        """恢复指定定时任务"""
-        return self.timer.resume_timer(name)
 
     @property
     def enabled(self) -> bool:
@@ -1635,6 +1637,16 @@ class PluginManager:
         self.logger.info(f"热重载插件: {name}")
         previous = self._plugins.get(name)
         was_enabled = bool(previous and previous._enabled)
+        # 这次重载后该不该处于「启用」状态：
+        #   * 原本启用着的 → 当然恢复；
+        #   * 「加载过、但上一次 on_enable 失败」的也要恢复 —— 失败时框架会把实例
+        #     留在 `_plugins` 里（`_enabled=False`），如果只认 `was_enabled`，一次
+        #     临时的启用报错就会让插件**永久停用**：文件改好了，watcher 也只加载
+        #     不启用，只能靠 `/reload`（无参）或重启才活过来，与「保存即修复」
+        #     的热重载承诺相反。
+        # 运维**显式禁用**的插件（`disable()` 会记进 `_disabled`）仍然保持禁用。
+        should_enable = was_enabled or (previous is not None
+                                        and name not in self._disabled)
         # 快照：谁依赖了它（用**旧**代码的声明，因为新代码还没加载）
         cascade = [u for u in self.dependents(name) if u != name]
         cascade_enabled = {u for u in cascade
@@ -1652,7 +1664,7 @@ class PluginManager:
         plugin = await self.load(name)
         if plugin is not None:
             ok = True
-            if was_enabled:
+            if should_enable:
                 # 加载成功 ≠ 能用：`on_enable` 失败时插件是「已加载但没启用」，
                 # 这时报「重载成功」会让 `/reload` 与 watcher 都以为没事了
                 # （watcher 会刷新 mtime，于是这份代码再也不会被重试）。
