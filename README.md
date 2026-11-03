@@ -36,6 +36,7 @@ cp config.example.json config.json     # 填 ws_url / token / superusers
 | [`bupt_news`](https://github.com/Green1423/ncqqpy-plugin-bupt-news) | 定时同步北邮校内通知（门户登录 + AI 摘要 + 表格/图片处理），按配置推送到指定群与私聊。 |
 | [`byrdocs`](https://github.com/Green1423/ncqqpy-plugin-byrdocs) | 检索 byrdocs.org 资料库、按编号翻页取详情、下载文件到群，带服务范围白名单。 |
 | [`essential`](https://github.com/Green1423/ncqqpy-plugin-essential) | 禁言/踢人/解禁/群信息等群管理命令，以及按群配置的入群欢迎语（含定时撤回）。 |
+| [`leyun_power`](https://github.com/carbon-wolf/leyun-power) | 宿舍水电费巡检：登录一卡通定时查余额，低于阈值自动推到群 / 私聊，支持自定义文案与 @人、夜间免打扰。 |
 | [`oj_bank`](https://github.com/Green1423/ncqqpy-oj-bank) | 在 QQ 里维护本地题库：洛谷抓题 / AI 搜题入库、题卡出图、10 组测试点判题，以及题组与榜单。 |
 | **plugin_manager**（自带） | 插件管理器：私聊里 `/plugin install/update/uninstall`，也可 `/plugin upload` 直接上传 zip（自动装 `requirements.txt`）；列表文件在 [ncqqpy-plugins](https://github.com/Green1423/ncqqpy-plugins) |
 
