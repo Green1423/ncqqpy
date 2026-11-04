@@ -75,6 +75,10 @@ class Backend:
         self.world = world or build_world(now=now)
         self.now = now
         self.calls: list[tuple[str, str]] = []      # 请求轨迹（场景脚本会断言它）
+        #: 最近若干次请求的查询参数/请求头（验证客户端"像不像官方 app"用）
+        self.trace: list[dict] = []
+        #: 故障注入：接下来 N 个请求返回 503（测客户端重试）
+        self.fail_next = 0
         self._routes: list[tuple[str, re.Pattern, Callable]] = []
         self._register()
 
@@ -88,6 +92,11 @@ class Backend:
         req = Request(method.upper(), path.rstrip("/") or "/", query, form,
                       json_body, headers)
         self.calls.append((req.method, req.path))
+        self.trace.append({"method": req.method, "path": req.path,
+                           "query": dict(query), "headers": dict(headers)})
+        if self.fail_next > 0:
+            self.fail_next -= 1
+            return _err(503, "模拟：服务端临时不可用")
         try:
             handler = self._match(req)
             if handler is None:

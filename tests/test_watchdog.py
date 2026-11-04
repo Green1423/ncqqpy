@@ -2969,6 +2969,12 @@ async def test_afterclass(tmp: Path):
         async def activities(self, **_kw):
             return list(self.acts)
 
+        async def fetch_activities(self, user, *, digest="", classes=None):
+            """与真实客户端同样的入口；**必须经过 activities()**，
+            否则子类覆写 `activities` 来注入失败就不生效了。"""
+            self.classes = {"1": "文体活动"}
+            return list(await self.activities())
+
         async def activity_classes(self):
             return [{"id": 1, "name": "文体活动"}]
 
