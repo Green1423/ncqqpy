@@ -140,3 +140,11 @@ async def lookup(args: dict, ctx=None) -> str:
 - 一条工具一句话，说**触发条件 + 动作**（「用户说 X 时调 Y」），不要重复 schema 里的参数说明；
 - 只写消费方**看不到 schema 就不知道**的信息（时机、优先级、失败怎么办）；
 - 别写「总是调用」——会和别的工具的时机提示打架，模型会乱调。
+
+## 18.7 消费侧怎么区分两者
+
+ai_chat 把 `## 可用能力` 分成**工具 / 技能**两组，并附一段选择依据；分组由
+`Tool.delegates` 自动决定 —— 提供方只管选 `register_skill` 还是 `register_tool`。
+
+完整提示词长什么样、为什么这么写，见插件自己的文档：
+[plugins/ai_chat/docs/08-tools.md](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/08-tools.md)。
