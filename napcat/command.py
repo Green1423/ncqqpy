@@ -9,7 +9,9 @@ import re
 import shlex
 import inspect
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Callable, Optional, Any, Type
+from zoneinfo import ZoneInfo
 
 
 # ==================== 参数验证系统 ====================
@@ -222,6 +224,45 @@ class DurationField(IntField):
         if self.max is not None and total > self.max:
             raise ValidationError(f"不能超过 {self.max} 秒")
         return total
+
+
+class DatetimeField(BaseField):
+    """时间点参数 — ``2026-11-10 18:00`` / ISO 8601 / 只写日期（当天 23:59）。
+
+    `false` / `-` 等清除词返回 ``False``，方便 `set` 区分「没给」和「明确清除」；
+    没给时返回 ``default``（通常是 None）。
+    """
+
+    FALSE_WORDS = {
+        "false", "0", "no", "off", "none", "-", "无", "清除", "clear",
+        "无截止", "不截止",
+    }
+
+    def __init__(self, *, tz=None, **kwargs):
+        super().__init__(**kwargs)
+        self.tz = tz or datetime.now().astimezone().tzinfo
+
+    def _clean(self, value: str) -> Any:
+        text = str(value or "").strip()
+        if text.lower() in self.FALSE_WORDS:
+            return False
+        normalized = text.replace("/", "-")
+        try:
+            if len(normalized) == 10:
+                day = date.fromisoformat(normalized)
+                moment = datetime(day.year, day.month, day.day,
+                                  23, 59, 0, 0)
+            else:
+                moment = datetime.fromisoformat(normalized)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                "时间格式不对，请写 2026-11-10 18:00"
+                "（也支持 ISO 8601；只写日期按 23:59）") from exc
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=self.tz)
+        else:
+            moment = moment.astimezone(self.tz)
+        return moment
 
 
 class ChoiceField(BaseField):

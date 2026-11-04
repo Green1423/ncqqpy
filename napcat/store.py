@@ -252,7 +252,9 @@ class DateTimeField(Field):
         raise FieldError(f"字段 {self.name} 需要 datetime，收到 {value!r}")
 
     def to_python(self, value: Any) -> Any:
-        if value is None or isinstance(value, datetime):
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
             return value
         try:
             return datetime.fromisoformat(str(value))
