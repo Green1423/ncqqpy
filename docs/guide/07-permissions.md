@@ -60,13 +60,13 @@ async def cmd_bind(packet):
 命令之外（事件处理、定时任务里）需要判断权限时：
 
 ```python
-# 用户是否满足某权限节点
+# 用户是否满足某权限节点（群聊必须显式 is_group=True）
 ok = await client.perm.check(user_id=100000001, permission="admin",
-                             group_id=100000002)
+                             group_id=100000002, is_group=True)
 
-# 用户是否达到某角色级别
+# 用户是否达到某角色级别（同上）
 is_admin = await client.perm.check_role(user_id=100000001, role="admin",
-                                        group_id=100000002)
+                                        group_id=100000002, is_group=True)
 
 # 超级用户管理
 client.perm.add_superuser(100000009)
@@ -77,7 +77,9 @@ client.perm.set_superusers([100000009, 100000010])
 client.perm.set_group_role(group_id=100000002, user_id=100000001, role="admin")
 ```
 
-私聊场景把 `group_id` 省略即可。
+私聊场景把 `group_id` 省略、`is_group` 留空即可。**只传 `group_id` 不传
+`is_group=True` 不会查群角色**（会被当成私聊上下文）；群小窗虽然有 `group_id`，
+仍应按私聊判（`is_group=False`）。
 
 ## 7.4 自定义权限节点
 

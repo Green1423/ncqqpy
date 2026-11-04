@@ -26,7 +26,7 @@
   "restart_command": "systemctl restart ncqq",
   "restart_mode": "systemd",
   "restart_timeout": 60.0,
-  "restart_cooldown": 60.0,
+  "restart_cooldown": 180.0,
   "restart_clear_cache_dir": "/opt/ncqq/napcat/cache",
   "watchdog_enabled": true,
   "watchdog": {},

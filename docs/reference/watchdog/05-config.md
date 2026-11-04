@@ -8,8 +8,9 @@
 | 键 | 默认 | 说明 |
 |----|------|------|
 | `restart_enabled` | `true` | 是否在连不上时拉起服务端 |
+| `watchdog_enabled` | `true` | 看门狗**总开关**（顶层键；不是 `watchdog.enabled`） |
 | `restart_mode` | `"systemd"` | `systemd` = `systemctl restart <unit>`；`launcher` = 把 `restart_command` 当命令行 exec |
-| `restart_command` | `"ncqq"` | systemd 模式下是**服务名**；launcher 模式下是完整命令行（如 `bash /opt/ncqq/launcher.sh`） |
+| `restart_command` | `"systemctl restart ncqq"` | systemd 模式下是**服务名**（写成完整的 `systemctl restart <unit>` 也接受，会自动归一化）；launcher 模式下是完整命令行（如 `bash /opt/ncqq/launcher.sh`） |
 | `restart_timeout` | `60.0` | 拉起命令超时（秒） |
 | `restart_cooldown` | `180.0` | 两次真实拉起之间的最小间隔（**默认 3 分钟**）：拉起+QQ 启动本身要几十秒，间隔太短只会反复重启、每次还要重新扫码 |
 | `restart_clear_cache_dir` | `/opt/ncqq/napcat/cache` | 拉起前清空的目录（登录二维码所在）。**需要 root**。安全防护：拒绝空值、相对路径、过浅路径（`/`、`/etc`、`/opt`、`/root`、家目录），命中则跳过并记日志 |
@@ -26,9 +27,11 @@
 
 ## 5.2 看门狗（`config.json → watchdog`）
 
+> 未写的键由框架按默认值补齐（只补内存，不写回文件）；`watchdog` 段里没有
+> `enabled` 这个开关，总开关是顶层的 `watchdog_enabled`。
+
 | 键 | 默认 | 说明 |
 |----|------|------|
-| `enabled` | `true` | 总开关 |
 | `qrcode_paths` | `["/opt/ncqq/napcat/cache/qrcode.png", "/opt/ncqq/cache/qrcode.png"]` | 二维码候选路径，取 mtime 最新的。**注意**：NapCat 实际写在 `cachePath`（`/opt/ncqq/napcat/cache/`）下，第二个路径只是兼容写法 |
 | `qrcode_wait_seconds` | `180` | 重连后等新二维码出现的时长 |
 | `qrcode_upscale` | `8` | 转发前放大倍数（微信会压图，放大更好扫） |
@@ -42,7 +45,7 @@
 | `startup_restart_check` | `true` | 启动重启前先探测是否已在线；已在线则不重启服务端（避免踢掉已登录会话、强制重新扫码） |
 | `startup_restart_probe_attempts` | `3` | 探测重试次数（防一次 `get_status` 超时误判） |
 | `startup_restart_probe_interval` | `1.0` | 探测重试间隔（秒） |
-| `reconnect_grace` | `30.0` | 连接断开后的观察期：这段时间内 WebSocket 自行恢复就不重启服务端；`0` = 立即恢复（旧行为） |
+| `reconnect_grace` | `30.0` | 连接断开后的观察期：这段时间内 WebSocket 自行恢复就不重启服务端；`0` = 不等待，立即进入恢复流程 |
 | `qrcode_after_launch_delay` | `20.0` | **拉起后等这么久再发二维码**（给 QQ 启动 + 出码留时间） |
 | `health_check` | `true` | 是否每 5 秒主动 `get_status` |
 | `health_interval` | `5.0` | 健康检查间隔（秒） |
@@ -53,11 +56,10 @@
 | `ilink_retry_interval` | `5.0` | 重试间隔：**失败就每 5 秒重试一次，直到成功或超时** |
 | `max_restart_cycles` | `0` | 每轮恢复流程的重启上限；`0` = 不限次数 |
 | `retry_notify_every_rounds` | `10` | 不限次数时，每这么多轮才发一条微信提示 |
-| `connect_timeout` | `60` | **每轮等登录成功的时限（1 分钟）**，超时回到「重启 ncqq」 |
-| `qrcode_wait_seconds` | `180` | 等二维码出现的上限（NapCat 出码慢时不至于漏发） |
+| `connect_timeout` | `60.0` | **每轮等登录成功的时限（1 分钟）**，超时回到「重启 ncqq」 |
 | `wechat.enabled` | `true` | 微信通道开关 |
 | `wechat.target` | `""` | 收通知的微信用户 id |
 | `wechat.auto_context` | `true` | 后台长轮询缓存 `context_token` |
-| `wechat.credentials_file` | `data/ilink_credentials.json` | 凭据路径 |
+| `wechat.credentials_file` | `napcat/data/ilink_credentials.json` | 凭据路径（相对仓库根） |
 
 ---

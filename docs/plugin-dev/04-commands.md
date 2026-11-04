@@ -169,6 +169,11 @@ async def cmd_group_kick(params, event):
 > `@self.register_command("buptnews.list", permission="", scope="all", ...)`
 > 让该子命令对所有人开放，不受父命令 `admin` 默认值影响。
 
+> **继承按注册顺序生效：父命令要先注册。** 子命令先注册时会以
+> `permission=""` / `scope="all"` 兜底，父命令之后注册**不会**回头改写它。
+> 声明式注册（`register_module`）请把父命令写在子命令前面；跨模块时按
+> `register_module(parent_module, child_module)` 的顺序传。
+
 > **有子命令的命令 = 命令组，本体不设权限、也不会被裸调执行。** 父命令上的
 > `permission`/`scope` 只作为子命令的默认值；`/group` 这类**没有子命令的裸调**由框架
 > 重定向到 `/help group`（帮助页里有本体描述 + 调用者有权使用的子命令），注册在父命令上的

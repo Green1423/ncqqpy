@@ -1,5 +1,7 @@
 # docstring 规范
 
+> 文档索引：[docs/README.md](../README.md) · 上级：[贡献规范](README.md)
+
 本项目的 docstring 同时服务两类读者：**人**（文档站 / 源码）和**编辑器**
 （PyCharm、VSCode、Jupyter 的参数提示）。因此统一采用 **PEP 257 + Google 风格**，
 中文描述、英文段落标题，让 IDE 能按 `Args` / `Returns` / `Raises` 解析出参数表。

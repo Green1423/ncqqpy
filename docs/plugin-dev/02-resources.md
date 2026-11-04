@@ -91,12 +91,12 @@ class MyPlugin(PluginBase):
 |------|------|
 | `self.client.ws_connected` | 当前 WebSocket 是否可用 |
 | `self.client.launcher` | `ServerLauncher`，`status()` 返回拉起次数/模式/最近结果 |
-| `self.client.launcher.launch(reason)` | 手动拉起服务端（配置见 (../../config.json) 顶层的 `restart_*`） |
+| `await self.client.launcher.launch(reason)` | 手动拉起服务端（配置见 (../../config.json) 顶层的 `restart_*`） |
 
 > 框架自身的拉起逻辑：连不上时按 `restart_command` 拉起服务端，**每轮连续失败只拉一次**，
-> 并在后台 task 里执行（不阻塞重连循环）。该逻辑现在是框架内置的
-> （(../../napcat/watchdog.py)，配置见 (../../config.json) 的
-> `watchdog*`；完整说明见 (../reference/watchdog/README.md)）——
-> 历史上的 `plugins/ncqq_watchdog` 插件已退役，只剩 (../../plugins/ncqq_watchdog/data) 目录。
+> 并在后台 task 里执行（不阻塞重连循环）。该逻辑现由框架内置
+> （[napcat/watchdog.py](../../napcat/watchdog.py)，配置见
+> config.json（config.json 只在本地，不入库） 的 `watchdog_enabled` / `watchdog.*` / `restart_*`；
+> 完整说明见 [看门狗](../reference/watchdog/README.md)）。
 
 ---

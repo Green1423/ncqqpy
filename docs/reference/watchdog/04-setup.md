@@ -23,7 +23,7 @@ requires interactive authentication.
 
 ```bash
 sudo tee /etc/polkit-1/rules.d/49-ncqq-watchdog.rules >/dev/null <<'EOF'
-// 允许 botuser 重启/启动 ncqq 服务（ncqq_watchdog 需要）
+// 允许 botuser 重启/启动 ncqq 服务（看门狗需要）
 polkit.addRule(function(action, subject) {
     var allowedUnits = ["ncqq.service", "ncqq"];
     if (action.id == "org.freedesktop.systemd1.manage-units" &&

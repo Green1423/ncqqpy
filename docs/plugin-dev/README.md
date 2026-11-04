@@ -15,16 +15,16 @@
 | [全部事件类型](05-event-types.md) | 5.1 MessageEvent 常用属性 |
 | [全部 API 方法](06-api-methods.md) | 6.1 消息 · 6.2 好友/用户 · 6.3 群组 · 6.4 文件 … |
 | [权限管理](07-permissions.md) | 7.1 角色层级 · 7.2 命令权限绑定 · 7.3 手动权限检查 · 7.4 自定义权限节点 … |
-| [消息构造](08-messages.md) | — |
-| [数据持久化（`napcat.store`）](09-store.md) | — |
-| [定时任务](10-timers.md) | — |
-| [文件管理](11-files.md) | — |
-| [完整插件示例](12-example.md) | — |
+| [消息构造](08-messages.md) | MessageChain 速查 |
+| [数据持久化（`napcat.store`）](09-store.md) | 模型 · 增删改查 · 事务 · 迁移边界 |
+| [定时任务](10-timers.md) | 排程语义 · 取消 / 恢复 |
+| [文件管理](11-files.md) | 11.1 信息与下载 · 11.2 上传 · 11.3 清理 |
+| [完整插件示例](12-example.md) | 一个可运行插件 |
 | [热重载](13-hot-reload.md) | 13.0 热重载只换插件代码（框架改动要重启） · 13.1 从 GitHub 装卸插件（`plugin_manager`） |
 | [插件包结构：注册与逻辑分离](14-layout.md) | 14.1 目录 · 14.2 注册：`plugin.py`（没有逻辑） · 14.3 逻辑：`commands/chat.py` · 14.4 逻辑：`events/` 与 `jobs/` … |
 | [配置管理](15-config.md) | 15.1 config.json · 15.2 bind / unbind 自动持久化 · 15.3 插件配置 · 15.4 ConfigManager API |
 | [错误处理与用户反馈](16-errors.md) | 16.1 三种写法，按你掌握的信息量选 · 16.2 错误类型速查（`from napcat.errors import ...`） · 16.3 框架怎么反馈 · 16.4 配置（`config.json` 顶层） … |
-| [技能（把能力交给 AI 用）](17-skills.md) | 17.1 注册 · 17.2 三条硬约束 · 17.3 调用上下文 · 17.4 生命周期 · 17.5 消费方 · 17.6 调试 |
+| [技能（把能力交给 AI 用）](17-skills.md) | 17.1 规矩 · 17.2 由谁把结果发给用户 · 17.3 消费方 · 17.4 调试 · 17.5 `prompt_hint` |
 | [工具（结果回给模型）](18-tools.md) | 18.1 注册 · 18.2 权限与作用域 · 18.3 生命周期 · 18.4 调试 · 18.5 拿到调用者 · 18.6 prompt_hint |
 | [渲染：Markdown 与 HTML 出图](19-render.md) | 19.1 `napcat.markdown` · 19.2 `napcat.render`（Chromium） · 19.3 什么时候用 · 19.4 常见坑 |
 | [服务范围：只服务名单里的人](20-subscribe.md) | 20.1 四条规矩 · 20.2 接进插件 · 20.3 判定 API · 20.4 三种上下文 · 20.5 按会话例外 · 20.6 名单维护 … |

@@ -19,7 +19,7 @@ async def daily():
 async def hourly_check(): ...
 ```
 
-注册只有这一个入口：`self.schedule` / `self.schedule_at`。它们比
+插件里注册定时任务请用 `self.schedule` / `self.schedule_at`。它们比
 `self.timer.every()` 多做一件事 —— **记下任务归属**，`on_disable`、卸载、
 加载失败时框架会自动取消（直接用 `self.timer.every()` 注册的任务框架不知道
 属于谁，插件走了任务还在跑）。

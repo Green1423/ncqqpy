@@ -1,5 +1,7 @@
 # 数据持久化：`napcat.store`（sqlite3 ORM）
 
+> 文档索引：[docs/README.md](../README.md) · 上级：[参考文档](README.md)
+
 插件要存点东西时，默认选择是 **`napcat.store`** —— 一个 Django 风格的极简 ORM，
 底层是标准库 `sqlite3`，数据库文件就放在插件自己的目录里。
 
@@ -89,11 +91,11 @@ note.save()                                    # 已存在 → UPDATE
 note.delete()                                  # 按主键删
 
 Note.objects.filter(views__gt=10).order_by("-views")[0:5]
-Note.objects.exclude(pinned=True).count()
+Note.objects.exclude(body="").count()
 Note.objects.first() / .last() / .exists()
 Note.objects.values("title", "views")          # [{"title":…, "views":…}]
-Note.objects.get_or_create(name="a", defaults={"age": 1})
-Note.objects.update_or_create(name="a", defaults={"age": 2})
+Note.objects.get_or_create(title="a", defaults={"views": 1})
+Note.objects.update_or_create(title="a", defaults={"views": 2})
 Note.objects.bulk_create([Note(title=f"n{i}") for i in range(100)])
 ```
 
@@ -165,7 +167,7 @@ db.tables() / db.columns("note") / db.table_exists("note")
 ## 测试
 
 ```bash
-./venv/bin/python -B tests/test_store.py    # 83 项
+./venv-arm/bin/python -B tests/test_store.py    # 83 项
 ```
 
 覆盖：建表/补列幂等、字段类型往返（含 JSON/时间/emoji/大文本）、全部查询后缀、

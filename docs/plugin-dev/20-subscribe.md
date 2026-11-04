@@ -6,8 +6,8 @@
 问题不是「怎么用」，而是**「谁能用」**。答案是白名单：只服务配置里列出的群和
 QQ 号，其余一律回绝。
 
-这套判定收在框架的 **`napcat.subscribe`** 里，四个官方插件（`ai_chat`、`bupt_news`、
-`byrdocs`、`oj_bank`）共用同一份实现 —— 自己另写一份的后果是四条边界逐渐不一致：
+这套判定收在框架的 **`napcat.subscribe`** 里，官方插件（`ai_chat`、`bupt_news`、
+`byrdocs`、`oj_bank`、`todo`）共用同一份实现 —— 自己另写一份的后果是四条边界逐渐不一致：
 有的空名单放行、有的拒绝，有的把「机器人监听哪些群」当成服务范围。
 
 ## 20.1 四条规矩
@@ -96,12 +96,15 @@ class DemoPlugin(PluginBase):
 
 ```python
 if self._subscription().user_ok(uid):
-    return True, ""
+    return True
 invited = self._invited_session_of(uid)      # 当前焦点是不是「他被邀请」的会话
 if invited is not None:
-    return True, ""
-return False, "私聊没有开通服务（…binding.users…）"
+    return True
+return False
 ```
+
+回绝时再按上下文给文案（如「私聊没有开通服务，见 `binding.users`」），不要把
+判定和文案耦合成两种返回形状。
 
 ## 20.6 名单怎么维护
 

@@ -4,7 +4,8 @@
 归档、贡献规范。文档只覆盖框架本身与**内置插件 `plugin_manager`**；其余插件是独立仓库
 发布的官方插件，手册随各自仓库走，不在这里收录。
 
-每篇文档开头都有「上级 / 上一章 / 下一章」导航。
+`guide/`、`plugin-dev/`、`reference/`、`contributing/` 的文档开头都标了**上级**，
+章节之间还有上一章 / 下一章导航。
 
 > 文档中的 QQ、群号、编号、密钥均为**虚构示例**，请替换成自己的数据。
 
@@ -50,10 +51,10 @@ docs/
 | [API 调用](guide/05-api.md) | 5.1 消息发送 · 5.2 群组管理 · 5.3 好友与用户 · 5.4 文件 · 5.5 系统与扩展 · 5.6 错误处理 |
 | [命令系统](guide/06-commands.md) | 6.1 基本用法 · 6.2 解析规则 · 6.3 CommandPacket · 6.4 返回值 · 6.5 子命令 · 6.6 非法输入 · 6.7 手动解析 · 6.8 命令别名 |
 | [权限管理](guide/07-permissions.md) | 7.1 角色层级 · 7.2 命令权限 · 7.3 手动检查 · 7.4 自定义节点 · 7.5 `/perm` · 7.6 `/userperm` |
-| [插件开发（基础）](guide/08-plugin-dev.md) | 8.1 插件基类 · 8.2 事件处理 · 8.3 定时任务 · 8.4 配置读取 |
-| [文件管理](guide/09-files.md) | 9.1 FileManager · 9.2 图片/文件上传 |
-| [定时事件](guide/10-timers.md) | 10.1 定时器 · 10.2 事件中间件 |
-| [高级用法](guide/11-advanced.md) | 11.1 自定义 API · 11.2 自定义事件 · 11.3 多客户端 |
+| [插件开发（基础）](guide/08-plugin-dev.md) | 8.1 插件基类 · 8.2 便捷方法 · 8.3 文件约定 · 8.4 插件管理 API · 8.5 热重载 · 8.6 生命周期 · 8.7 完整示例 · 8.8 装卸插件 |
+| [文件管理](guide/09-files.md) | 9.1 文件信息 · 9.2 流式下载 · 9.3 流式上传 · 9.4 清理与校验 |
+| [定时事件](guide/10-timers.md) | 10.1 周期任务 · 10.2 每日定时 · 10.3 延迟执行 · 10.4 定时器管理 |
+| [高级用法](guide/11-advanced.md) | 11.1 EventBus 直接使用 · 11.2 低频 API 直接调用 · 11.3 自定义日志 · 11.4 事件中发送 API |
 | [API 参考速查](guide/12-api-reference.md) | 全部 API 方法速查表 |
 
 ## 二、写插件（`plugin-dev/`）
@@ -67,20 +68,20 @@ docs/
 | [全部事件类型](plugin-dev/05-event-types.md) | 5.1 MessageEvent 常用属性 |
 | [全部 API 方法](plugin-dev/06-api-methods.md) | 6.1 消息 · 6.2 好友/用户 · 6.3 群组 · 6.4 文件 … |
 | [权限管理](plugin-dev/07-permissions.md) | 7.1 角色层级 · 7.2 命令绑定 · 7.3 手动检查 · 7.4 自定义节点 · 7.4.1 用户级覆盖 · 7.5 `/perm` |
-| [消息构造](plugin-dev/08-messages.md) | 8.1 MessageChain 速查 |
-| [数据持久化](plugin-dev/09-store.md) | 9.1 定义模型 · 9.2 增删改查 · 9.3 事务 |
-| [定时任务](plugin-dev/10-timers.md) | 10.1 排程语义 · 10.2 取消/恢复 |
-| [文件管理](plugin-dev/11-files.md) | 11.1 FileManager |
-| [完整插件示例](plugin-dev/12-example.md) | 12.1 一个可运行插件 |
-| [热重载](plugin-dev/13-hot-reload.md) | 13.1 自动检测 · 13.2 手动重载 · 13.3 失败回滚 |
-| [插件包结构](plugin-dev/14-layout.md) | 14.1 `__init__.py` 只装配 · 14.2 逻辑拆分 · 14.3 声明式注册 |
-| [配置管理](plugin-dev/15-config.md) | 15.1 首次生成 · 15.2 读写 · 15.3 契约测试 |
-| [错误处理](plugin-dev/16-errors.md) | 16.1 错误类型 · 16.2 速查 · 16.3 用户反馈 |
-| [技能（把能力交给 AI 用）](plugin-dev/17-skills.md) | 17.1 注册 · 17.2 三条硬约束 · 17.3 调用上下文 · 17.4 生命周期 · 17.5 消费方 · 17.6 调试 |
+| [消息构造](plugin-dev/08-messages.md) | MessageChain 速查 |
+| [数据持久化](plugin-dev/09-store.md) | 模型定义 · 增删改查 · 事务 · 迁移边界 |
+| [定时任务](plugin-dev/10-timers.md) | 排程语义 · 取消 / 恢复 |
+| [文件管理](plugin-dev/11-files.md) | 11.1 信息与下载 · 11.2 上传 · 11.3 清理 |
+| [完整插件示例](plugin-dev/12-example.md) | 一个可运行插件 |
+| [热重载](plugin-dev/13-hot-reload.md) | 13.0 只换插件代码 · 13.1 从 GitHub 装卸插件 |
+| [插件包结构](plugin-dev/14-layout.md) | 14.1 目录 · 14.2 注册（`plugin.py`） · 14.3 逻辑（`commands/`） · 14.4 逻辑（`events/`、`jobs/`） … |
+| [配置管理](plugin-dev/15-config.md) | 15.1 config.json · 15.2 bind / unbind 持久化 · 15.3 插件配置（`config_template`） · 15.4 ConfigManager API |
+| [错误处理](plugin-dev/16-errors.md) | 16.1 三种写法 · 16.2 错误类型速查 · 16.3 框架怎么反馈 · 16.4 配置 · 16.5 两条守则 |
+| [技能（把能力交给 AI 用）](plugin-dev/17-skills.md) | 17.1 规矩 · 17.2 由谁发结果 · 17.3 消费方 · 17.4 调试 · 17.5 `prompt_hint` |
 | [工具（结果回给模型）](plugin-dev/18-tools.md) | 18.1 注册 · 18.2 权限与作用域 · 18.3 生命周期 · 18.4 调试 · 18.5 拿到调用者 · 18.6 prompt_hint |
 | [渲染：Markdown 与 HTML 出图](plugin-dev/19-render.md) | 19.1 `napcat.markdown` · 19.2 `napcat.render`（Chromium） · 19.3 什么时候用 · 19.4 常见坑 |
-| [服务范围](plugin-dev/20-subscribe.md) | 20.1 四条规矩 · 20.2 接进插件 · 20.3 判定 API · 20.4 三种上下文 · 20.5 按会话例外 · 20.6 名单维护 |
-| [本地状态与清理](plugin-dev/21-persist.md) | 21.1 JSON 状态 · 21.2 按数量清理 · 21.3 按引用清理 · 21.4 怎么选 · 21.5 与 sqlite 的边界 |
+| [服务范围](plugin-dev/20-subscribe.md) | 20.1 四条规矩 · 20.2 接进插件 · 20.3 判定 API · 20.4 三种上下文 · 20.5 按会话例外 · 20.6 名单维护 · 20.7 targets · 20.8 常见坑 |
+| [本地状态与清理](plugin-dev/21-persist.md) | 21.1 JSON 状态 · 21.2 按数量清理 · 21.3 按引用清理 · 21.4 怎么选 · 21.5 与 sqlite 的边界 · 21.6 目录约定 |
 
 ## 三、插件（`plugins/`）
 

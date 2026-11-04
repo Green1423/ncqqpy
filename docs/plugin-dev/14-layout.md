@@ -70,7 +70,7 @@ async def say(plugin, params, event):
 ```
 
 第一个参数**固定是插件实例**（`plugin`）—— 逻辑模块不需要 import 插件类，也不会
-和 `plugin.py` 互相 import 成环；`plugin.cfg` / `plugin.database()` / `plugin.api`
+和 `plugin.py` 互相 import 成环；`plugin.config` / `plugin.database()` / `plugin.api`
 都从它拿。
 
 ## 14.4 逻辑：`events/` 与 `jobs/`
@@ -83,7 +83,7 @@ from napcat.registry import event
 
 @event(MessageEvent, description="记一条消息")
 async def on_message(plugin, event):
-    if not plugin.cfg["enabled"]:
+    if not plugin.config.get("enabled"):
         return
     ...
 ```

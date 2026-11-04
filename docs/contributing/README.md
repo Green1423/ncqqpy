@@ -1,5 +1,7 @@
 # 贡献规范
 
+> 上级：[文档索引](../README.md)
+
 | 文档 | 内容 |
 |------|------|
 | [docstring 规范](docstrings.md) | PEP 257 + Google 风格、`Args`/`Returns`/`Raises`、编辑器可解析 |

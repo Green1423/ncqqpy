@@ -28,6 +28,7 @@ from .permission import PermissionManager
 from .file_manager import FileManager
 from .launcher import (
     ServerLauncher, DEFAULT_RESTART_COMMAND, DEFAULT_RESTART_MODE,
+    DEFAULT_RESTART_COOLDOWN,
 )
 from .plugin import PluginManager, PluginBase
 from .errors import ErrorReporter, PluginError, PluginRuntimeError, short_reason
@@ -686,8 +687,11 @@ class NapCatClient:
                         else self.cfg.get("restart_mode", DEFAULT_RESTART_MODE))
         restart_timeout = (restart_timeout if restart_timeout is not None
                            else self.cfg.get("restart_timeout", 60.0))
+        # 与 ServerLauncher 共用同一个默认值（180s = 3 分钟）。这里曾经写死 60，
+        # 配置里没写这个键时会把 launcher 的 180 覆盖成 60，和文档/配置示例不一致。
         restart_cooldown = (restart_cooldown if restart_cooldown is not None
-                            else self.cfg.get("restart_cooldown", 60.0))
+                            else self.cfg.get("restart_cooldown",
+                                              DEFAULT_RESTART_COOLDOWN))
 
         # 回写默认值到文件（首次启动）
         self.cfg.setdefault("ws_url", ws_url)
@@ -748,7 +752,15 @@ class NapCatClient:
         if self.cfg.get("watchdog_enabled", True):
             from .watchdog import Watchdog
             wd_cfg = dict(self.cfg.get("watchdog", {}) or {})
-            wd_cfg.setdefault("enabled", True)
+            # `watchdog.enabled` 曾经被当成开关写进这个字典，但 Watchdog 从不读它；
+            # 真正的开关是顶层 `watchdog_enabled`。保留旧键只会让人误以为关掉了，
+            # 所以发现就明确提示并丢弃。
+            if "enabled" in wd_cfg:
+                self.logger.warning(
+                    "[watchdog] config.json 的 watchdog.enabled 不生效："
+                    "总开关是顶层 watchdog_enabled（当前 %s）",
+                    self.cfg.get("watchdog_enabled", True))
+                wd_cfg.pop("enabled", None)
             self.watchdog = Watchdog(self, wd_cfg, logger=self.logger)
 
         # ---- 子系统 ----

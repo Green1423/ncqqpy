@@ -96,32 +96,32 @@ git clone https://github.com/Green1423/ncqqpy-plugin-ai-chat plugins/ai_chat
 
 | 套件 | 覆盖 |
 |------|------|
-| `tests/test_watchdog.py` | 覆盖 |
-| `tests/test_command_parser.py` | 覆盖 |
-| `tests/test_help_structure.py` | 覆盖 |
-| `tests/test_command_permissions.py` | 覆盖 |
-| `tests/test_plugin_errors.py` | 覆盖 |
-| `tests/test_plugin_config.py` | 覆盖 |
-| `tests/test_plugin_deps.py` | 覆盖 |
-| `tests/test_timer.py` | 覆盖 |
-| `tests/test_message.py` | 覆盖 |
-| `tests/test_store.py` | 覆盖 |
-| `tests/test_plugin_layout.py` | 覆盖 |
-| `tests/test_plugin_registry.py` | 覆盖 |
-| `tests/test_plugin_ws_decoupling.py` | 覆盖 |
-| `tests/test_userperm.py` | 覆盖 |
-| `tests/test_public_api.py` | 覆盖 |
-| `tests/test_command_alias.py` | 覆盖 |
-| `tests/test_unicode_names.py` | 覆盖 |
-| `tests/test_bool_short_flags.py` | 覆盖 |
-| `tests/test_docs.py` | 覆盖 |
-| `tests/test_docstrings.py` | 覆盖 |
-| `tests/test_watchdog_online.py` | 覆盖 |
-| `tests/test_api_coverage.py` | 覆盖 |
-| `tests/test_file_stream.py` | 覆盖 |
-| `tests/test_multiline.py` | 覆盖 |
-| `tests/test_subscribe.py` | 覆盖 |
-| `tests/test_persist.py` | 覆盖 |
+| `tests/test_watchdog.py` | 框架回归：WS/重连/服务器拉起/看门狗/插件热重载/AI 摘要重试 |
+| `tests/test_command_parser.py` | 命令解析 + 配置口径基线 |
+| `tests/test_help_structure.py` | /help 三级入口 + 权限/作用域 + 帮助重定向 |
+| `tests/test_command_permissions.py` | 运行时权限覆盖（/perm） |
+| `tests/test_plugin_errors.py` | 错误类型 / 统一错误反馈（@触发者 / 编号 / 节流 / 超管通道） |
+| `tests/test_plugin_config.py` | 插件配置模板契约（首次运行初始化全部配置项） |
+| `tests/test_plugin_deps.py` | 插件依赖：必需/可选声明、拓扑序、缺依赖不加载、卸载保护 |
+| `tests/test_timer.py` | 定时任务精度（不累积偏差 / 落后跳过 / 每日定时月末 / 暂停恢复） |
+| `tests/test_message.py` | 消息切分（原文链接不被切断 / 预算不浪费 / 媒体配额） |
+| `tests/test_store.py` | sqlite ORM（字段/查询/事务/补列/并发/插件集成） |
+| `tests/test_plugin_layout.py` | 插件目录布局（拆分 __init__.py / PLUGIN 声明 / 热重载） |
+| `tests/test_plugin_registry.py` | 声明式注册（注册处只装配 / 逻辑分模块 / 卸载回收） |
+| `tests/test_plugin_ws_decoupling.py` | 生命周期与 WebSocket 解耦（重连不重载插件） |
+| `tests/test_userperm.py` | 用户级权限（全局/群内覆盖、优先级、群角色默认 admin、持久化） |
+| `tests/test_public_api.py` | 公开 API 分类（子模块导入 / 懒加载 / 兼容层） |
+| `tests/test_command_alias.py` | 命令别名（增删改查 / 持久化 / 热重载重放 / 生命周期清理） |
+| `tests/test_unicode_names.py` | 命令名/别名支持非 ASCII（中文、连字符、注册期校验、落盘） |
+| `tests/test_bool_short_flags.py` | 布尔参数简写（-y / 显式 short / 歧义 / 帮助展示） |
+| `tests/test_docs.py` | 文档链接/锚点/索引可达/篇幅 |
+| `tests/test_docstrings.py` | docstring 规范（摘要 / 段落 / 核心 API Args） |
+| `tests/test_watchdog_online.py` | 看门狗：启动已在线跳过 / 掉线观察期 / 健康检查降噪 |
+| `tests/test_api_coverage.py` | API 覆盖：官方 178 个 action / 字段名回归 |
+| `tests/test_file_stream.py` | 流式文件：分块上传 / 流式下载 / FileManager / 多包路由 |
+| `tests/test_multiline.py` | 多行字符串（"""…""" 原始内容 / 错误提示 / Schema 端到端） |
+| `tests/test_subscribe.py` | 订阅名单（parse_ids / 群·私聊·小窗判定 / 会话例外） |
+| `tests/test_persist.py` | 本地 JSON 状态（原子写 / 按数量与按引用清理） |
 
 ## 目录
 

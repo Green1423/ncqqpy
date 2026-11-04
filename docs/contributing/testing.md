@@ -1,5 +1,7 @@
 # 测试与发布
 
+> 文档索引：[docs/README.md](../README.md) · 上级：[贡献规范](README.md)
+
 ## 测试
 
 全部套件都是**独立脚本**（不依赖 pytest），在仓库根用 venv-arm 跑：
@@ -32,8 +34,11 @@
 ## 发布
 
 ```bash
-# 生成 dist/ 七个仓库（框架 + 5 插件 + 插件索引）
+# 生成 dist/ 七个仓库（框架 + 6 插件）
 ./venv-arm/bin/python -B tests/build_repos.py --check
+
+# 插件索引仓（dist/ncqqpy-plugins）由专用工具生成
+./venv-arm/bin/python -B tools/publish_plugins_repo.py
 
 # 提交并推送（SSH；脚本自带 ssh -F /dev/null 兜底）
 ./venv-arm/bin/python -B tests/publish_repos.py -m "变更说明" --push

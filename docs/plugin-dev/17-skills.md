@@ -33,7 +33,7 @@ async def on_load(self):
 * **不需要写 handler**：`register_skill()` 返回 `Skill`，不接收函数；
 * 卸载/禁用/热重载时框架按插件名整批撤销。
 
-## 17.1a 由谁把结果发给用户
+## 17.2 由谁把结果发给用户
 
 命令的产物可能是 `str`、`MessageChain`、**`list[MessageChain]`**（长通知分段）或
 段列表 —— 分段、图片、@ 的规矩只有插件自己知道。所以**推荐插件自己发**：
@@ -50,7 +50,7 @@ async def _deliver_skill_output(self, payload, ctx):
 **这个坑实测踩过两次**：chain 列表被当段列表 → 整条通知一个字都没发出去，
 用户只收到一句「执行完了，但没有返回内容」。
 
-## 17.2 消费方：ai_chat 侧
+## 17.3 消费方：ai_chat 侧
 
 `ai_chat` 把每个技能包成一个**委派型工具**（`delegates=True`）：
 
@@ -66,7 +66,7 @@ async def _deliver_skill_output(self, payload, ctx):
 {"enabled": true, "allow": [], "deny": ["byrdocs.search"]}
 ```
 
-## 17.3 调试
+## 17.4 调试
 
 ```python
 self.skills.list()                       # 现在有哪些技能
@@ -80,7 +80,7 @@ self.skills.unregister_plugin("byrdocs") # 手工撤（一般不用，框架会�
 > ⚠️ 技能通道是**框架代码**：换框架版本要**重启进程**才生效（热重载只换插件）。
 > 旧进程里插件会打一行警告并跳过技能注册，命令不受影响。
 
-## 17.1b 什么时候该用我（`prompt_hint`）
+## 17.5 什么时候该用我（`prompt_hint`）
 
 ```python
 self.register_skill(

@@ -14,7 +14,7 @@
 | `command_prefixes` | `list[str]` | `None` | 命令前缀，默认 `["/", "!", "。", "#"]` |
 | `max_concurrency` | `int` | `100` | 事件处理器最大并发数 |
 | `reconnect_interval` | `float` | `5.0` | 断线后首次重连等待（秒）；连续失败按 2 倍指数退避、封顶 60s |
-| `api_delay` | `float \| list[float]` | `[0.5, 1.0]` | **所有 API 上报**发送前的延迟：数字=固定值，`[min, max]`=随机区间（秒）。`0` 关闭 |
+| `api_delay` | `float \| list[float]` | `[0.5, 1.0]` | **普通 API 调用**发送前的延迟：数字=固定值，`[min, max]`=随机区间（秒）。`0` 关闭；流式分块不节流 |
 
 > `api_delay` / `reconnect_interval` 也可以写在 (../../config.json) 里（构造参数优先）。
 > `api_delay` 同时起**串行**作用：并发发起的 API 调用会排队，两次上报间隔不小于区间下限。
@@ -99,8 +99,8 @@ client = NapCatClient(offline_hold_timeout=300)    # 最多等 5 分钟，超时
 > 副作用：掉线期间插件里的推送/发送会**挂住**而不是报错，等重连后补发
 > （例如 (../../plugins/bupt_news) 的一轮同步会一直等到重连才结束，期间后续轮次自动跳过）。
 
-**所有 API 上报节流**：`ApiClient` 的每个调用发送前都会等待 `api_delay`
-（默认 0.5–1.0s 随机值）并串行化，用于规避 QQ/NapCat 的风控阈值：
+**普通 API 调用的上报节流**（流式分块除外）：`ApiClient` 的调用发送前会等待
+`api_delay`（默认 0.5–1.0s 随机值）并串行化，用于规避 QQ/NapCat 的风控阈值：
 
 ```python
 client = NapCatClient(api_delay=(0.5, 1.0))   # 默认；区间随机

@@ -26,10 +26,15 @@ async def cmd_reload(packet): ...
 ## 7.3 手动权限检查
 
 ```python
-can = await self.perm.check(user_id=123, permission="admin", group_id=456)
+can = await self.perm.check(user_id=123, permission="admin",
+                            group_id=456, is_group=True)
 
-is_admin = await self.perm.check_role(user_id=123, role="admin", group_id=456)
+is_admin = await self.perm.check_role(user_id=123, role="admin",
+                                       group_id=456, is_group=True)
 ```
+
+> **`is_group` 不能省**：只给 `group_id` 时框架按私聊上下文判，群角色不参与
+> （群小窗也按私聊判，即使 `group_id` 有值）。
 
 ## 7.4 自定义权限节点
 

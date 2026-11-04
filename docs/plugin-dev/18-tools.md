@@ -16,7 +16,7 @@
 ## 18.1 注册
 
 ```python
-from napcat import PluginBase
+from napcat.plugin import PluginBase
 
 class DemoPlugin(PluginBase):
     name = "demo"

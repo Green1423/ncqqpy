@@ -33,7 +33,7 @@ PluginManager.enable()
 ...运行中...                                   # 处理事件、响应命令
 
 PluginManager.disable()
-  └→ on_disable()                            # 自动注销本次注册的处理器
+  └→ on_disable()                            # 自动注销本次注册的事件处理器
 
 PluginManager.unload()
   └→ on_unload()                             # 释放资源、清理

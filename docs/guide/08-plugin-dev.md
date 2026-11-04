@@ -66,10 +66,14 @@ class MyPlugin(PluginBase):
 
 ## 8.3 插件文件约定
 
-1. 插件文件放在 `./plugins/` 目录下（或客户端初始化时指定的 `plugin_dir`）
-2. 文件名 = 插件名，如 `my_plugin.py`
-3. 文件中必须有一个（或多个）继承 `PluginBase` 的公开类
-4. 以 `_` 开头的文件会被自动忽略（`_disabled.py`）
+1. 插件放在 `./plugins/` 目录下（或客户端初始化时指定的 `plugin_dir`）；
+2. **推荐包目录**：`plugins/my_plugin/__init__.py`，目录名 = 插件名；
+   也支持单文件 `plugins/my_plugin.py`（文件名 = 插件名）；
+3. 包目录里用 `PLUGIN = MyPlugin` 显式指定入口类（不写会按模块属性字母序扫
+   第一个 `PluginBase` 子类，拆分模块后容易取到基类）；单文件直接定义子类即可；
+4. 以 `.` 或 `_` 开头的条目不参与加载（`_disabled.py`、`.trash/`）。
+
+> 包结构与「注册/逻辑分离」的完整写法见 [插件包结构](../plugin-dev/14-layout.md)。
 
 ## 8.4 插件管理 API
 
@@ -188,9 +192,9 @@ class WelcomePlugin(PluginBase):
 
         @self.register_command("welcome_toggle", permission="admin")
         async def toggle(packet):
-            # ⚠️ PluginBase **没有** `self.disable()`（旧文档这里写的
-            # `await self.disable()` 会直接 AttributeError）。命令作用域内的
-            # 「关掉这个功能」要自己实现：撤销本命令注册的处理器 + 记一个开关位。
+            # ⚠️ PluginBase **没有** `self.disable()`，调用会直接 AttributeError。
+            # 命令作用域内的「关掉这个功能」要自己实现：
+            # 撤销本命令注册的处理器 + 记一个开关位。
             self.off_all_events()
             self.unregister_command("welcome_toggle")
             return "欢迎功能已关闭"

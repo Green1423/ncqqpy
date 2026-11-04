@@ -3,8 +3,8 @@
 > 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[命令注册](04-commands.md) · 下一章：[全部 API 方法](06-api-methods.md)
 
 
-| 事件类 | post_type | notice_type | 触发场景 |
-|--------|-----------|-------------|----------|
+| 事件类 | post_type | notice_type / sub_type | 触发场景 |
+|--------|-----------|------------------------|----------|
 | `HeartbeatEvent` | meta_event | — | 定时心跳 |
 | `LifeCycleEvent` | meta_event | — | 连接/启用/禁用 |
 | `MessageEvent` | message | — | 接收私聊/群聊消息 |
@@ -15,12 +15,12 @@
 | `GroupRecallEvent` | notice | group_recall | 群消息撤回 |
 | `GroupUploadEvent` | notice | group_upload | 群文件上传 |
 | `GroupCardEvent` | notice | group_card | 群名片修改 |
-| `GroupNameEvent` | notice | group_name | 群名修改 |
-| `GroupTitleEvent` | notice | title | 群头衔变更 |
-| `PokeEvent` | notice | poke | 戳一戳 |
-| `InputStatusEvent` | notice | input_status | 对方正在输入 |
-| `ProfileLikeEvent` | notice | profile_like | 资料卡点赞 |
-| `GroupGrayTipEvent` | notice | gray_tip | 群灰条消息 |
+| `GroupNameEvent` | notice | notify / group_name | 群名修改 |
+| `GroupTitleEvent` | notice | notify / title | 群头衔变更 |
+| `PokeEvent` | notice | notify / poke | 戳一戳 |
+| `InputStatusEvent` | notice | notify / input_status | 对方正在输入 |
+| `ProfileLikeEvent` | notice | notify / profile_like | 资料卡点赞 |
+| `GroupGrayTipEvent` | notice | notify / gray_tip | 群灰条消息 |
 | `FriendAddEvent` | notice | friend_add | 好友添加 |
 | `FriendRecallEvent` | notice | friend_recall | 好友消息撤回 |
 | `EssenceEvent` | notice | essence | 精华消息变更 |
@@ -30,6 +30,9 @@
 | `OnlineFileReceiveEvent` | notice | online_file_receive | 在线文件接收 |
 | `FriendRequestEvent` | request | — | 好友请求 |
 | `GroupRequestEvent` | request | — | 群请求/邀请 |
+
+> `notice` 里 `notice_type=notify` 的六类事件靠 `sub_type` 区分；`request`
+> 事件靠 `request_type`（`friend` / `group`）区分。
 
 ## 5.1 MessageEvent 常用属性
 

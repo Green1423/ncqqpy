@@ -14,7 +14,6 @@
 | (../../../napcat/qr_text.py) | QR 编码器（把二维码链接画成 ASCII/PNG） |
 | (../../../napcat/qr_image.py) | PNG 解码 + 最近邻放大（把 NapCat 的 147×147 小图放大到能扫） |
 | (../../../napcat/ilink_login.py) | 扫码登录入口（`python -m napcat.ilink_login`） |
-| (../../../plugins/ncqq_watchdog) | 退役插件的残留目录（只剩 `data/`，不再是代码位置） |
 | (../../../tests/test_watchdog.py) | 端到端测试（真起 WebSocket 服务端 + 真执行进程） |
 
 ---

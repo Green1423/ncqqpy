@@ -20,4 +20,4 @@ async def on_load(self):
 Django 风格的 `objects.create/get/filter/order_by/count/exists/values`、
 `field__gt/gte/lt/lte/in/range/contains/isnull` 查询后缀、`with db.atomic():`
 事务（可嵌套）、`ensure_schema()` 幂等补列、`await db.run(fn)` 线程逃生口。
-卸载/热重载时框架自动关闭连接。完整参考见 (../store.md)。
+卸载/热重载时框架自动关闭连接。完整参考见 [sqlite ORM 参考](../reference/store.md)。

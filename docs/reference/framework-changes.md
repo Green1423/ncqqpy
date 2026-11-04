@@ -33,6 +33,8 @@
 | 变更 | 影响 | 需要做什么 |
 |------|------|-----------|
 | 插件发现跳过 `.` 开头的目录 | `plugins/.trash`、安装中的 `plugins/.new-<名>` 不会再被当成插件加载 | 无（若你依赖过这种目录名做插件，改成不以 `.` 开头） |
+| `restart_cooldown` 未配置时的默认值统一为 180s | 客户端曾在配置缺省时回落 60s，与 `ServerLauncher` 和文档的 180s 不一致 | 无；显式配置的值仍然优先 |
+| `watchdog.enabled` 不再作为开关 | 看门狗总开关是顶层 `watchdog_enabled`；旧键会记 warning 并忽略 | 把配置里的 `watchdog.enabled` 改成顶层 `watchdog_enabled` |
 | `PluginBase.stop_command(name)` 回收别名 | 删除命令时它的别名条目一起消失（走 `CommandManager.unregister`），不会再出现「命令没了、别名还能用」 | 无 |
 | `napcat.scope` 改名为 `napcat.subscribe`：`Scope` → `Subscription` | 判定语义不变（群/小窗按来源群、私聊按用户、空名单=谁都不用、超管豁免）。老名字保留为**兼容别名**（`napcat/scope.py` 转发到新模块） | 插件把 `from napcat.scope import Scope` 改成 `from napcat.subscribe import Subscription`；别名会在所有插件改用新名后删除 |
 | **定时任务 API 收敛**：删掉 `PluginBase.stop_timer` / `pause_timer` / `resume_timer` / `cancel_schedule` | 这 4 个方法只是 `self.timer` 的同名转发（原来还有两个名字做同一件事）。现在**注册**用 `self.schedule` / `self.schedule_at`（带归属，卸载自动取消），**管理**用 `self.timer.cancel/pause_timer/resume_timer` | 把 `self.stop_timer(x)` 改成 `self.timer.cancel(x)`、`self.pause_timer(x)` 改成 `self.timer.pause_timer(x)`、`self.cancel_schedule(x)` 改成 `self.timer.cancel(x)` |
@@ -49,7 +51,7 @@
 
 ## 4. 服务范围口径统一
 
-四个官方插件（`ai_chat` / `bupt_news` / `byrdocs` / `oj_bank`）现在共用
+五个官方插件（`ai_chat` / `bupt_news` / `byrdocs` / `oj_bank` / `todo`）现在共用
 [`napcat.subscribe`](../plugin-dev/20-subscribe.md) 的判定：
 
 | 维度 | 统一后的行为 |
@@ -65,7 +67,8 @@
 - `ai_chat`：**按会话邀请**的例外保留 —— 受邀者在**私聊**可用，群里不放开；
 - `bupt_news`：`targets` 的逐对象配置保留（`message` / `event` / `token_file` / `token_by`），
   判准入只看两张表的键；
-- `oj_bank`：`/oj bind` 的管理命令语义不变。
+- `oj_bank`：`/oj bind` 的管理命令语义不变；
+- `todo`：同一口径，没有额外例外（名单为空时只有超管可用）。
 
 **配置变更**：`binding.empty_means` 已移除。老配置里保留这个键不会报错，但不再生效。
 
