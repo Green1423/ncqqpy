@@ -60,15 +60,10 @@
 
 ## 6.4 文件
 
-| 方法 | 参数 | 返回 |
-|------|------|------|
-| `get_image(file)` | | `FileInfo` |
-| `get_record(file)` | | `FileInfo` |
-| `get_file(file)` | | `FileInfo` |
-| `upload_group_file(group_id, file, name, folder, upload_file)` | | `Any` |
-| `download_file(*, url, base64, name, headers)` | | `FileInfo` |
-| `get_group_root_files(group_id)` | | `Any` |
-| `get_group_files_by_folder(group_id, folder_id)` | | `Any` |
+文件类 action **不在 `ApiClient` 的公开接口里**：统一由 `FileManager`（插件里的
+`self.files` / 客户端上的 `client.files`）承载，避免插件直接拼文件 action 参数。
+可用方法见 [文件管理](11-files.md)：`get_image` / `get_record` / `get_file` /
+`download_*` / `upload_*` / 群文件 / 闪传 / 在线文件 / `clean_temp`。
 
 ## 6.5 系统/扩展
 

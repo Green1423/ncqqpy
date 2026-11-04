@@ -223,18 +223,6 @@ async def _fetch_bytes(file_manager, api, *, file=None, file_id=None,
             raise
         except Exception:             # noqa: BLE001 - 平台差异大，退下一档
             pass
-    if api is not None:
-        try:
-            chunks = []
-            async for chunk in api.download_file_stream(
-                    file=file, file_id=file_id, timeout=timeout):
-                _bounded(chunks, chunk)
-            if chunks:
-                return b"".join(chunks)
-        except PackageFileError:
-            raise
-        except Exception:             # noqa: BLE001
-            pass
     return await download(file, limit=limit, timeout=timeout, roots=roots)
 
 
@@ -286,11 +274,13 @@ async def from_segment(segment: dict, api: Any, *, limit: int,
 
     if raw is None and file_id:
         # 退路：有些实现只有 `get_file` 里才有可用的 url / 落盘路径
-        try:
-            info = await api.get_file(file_id=file_id)
-        except Exception as e:  # noqa: BLE001 - 平台差异大，统一转成人话
-            info = None
-            last_error = PackageFileError(f"读取文件信息失败：{type(e).__name__}")
+        info = None
+        if file_manager is not None:
+            try:
+                info = await file_manager.get_file(file_id=file_id)
+            except Exception as e:  # noqa: BLE001 - 平台差异大，统一转成人话
+                last_error = PackageFileError(
+                    f"读取文件信息失败：{type(e).__name__}")
         if info is not None:
             name = name or _info_name(info)
             source = _info_url(info) or _info_path(info)

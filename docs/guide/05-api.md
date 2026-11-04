@@ -6,6 +6,8 @@
 
 
 `client.api` 提供 100+ 方法，**自动提取响应 `data` 字段**，失败抛出 `ApiError`。
+文件类方法（上传/下载/群文件/闪传/在线文件）不在 `client.api` 上，统一用
+`client.files`（`FileManager`），见 [文件管理](09-files.md)。
 
 ## 5.1 消息发送
 
@@ -94,16 +96,16 @@ await client.api.get_recent_contact()
 info = await client.api.get_image("file_id")
 # FileInfo(file="/tmp/xxx.jpg", url="https://...", size=12345, base64="...")
 
-# 上传群文件
-await client.api.upload_group_file(
+# 上传群文件（文件接口在 client.files，不在 client.api）
+await client.files.upload_group_file(
     group_id="123456",
     file="/path/to/file.pdf",
     name="file.pdf",
 )
 
-# 下载文件
-info = await client.api.download_file(url="https://example.com/doc.pdf")
-print(info.file)  # 本地临时路径
+# 下载文件（流式写本地，返回路径）
+path = await client.files.download("https://example.com/doc.pdf")
+print(path)
 ```
 
 ## 5.5 系统与扩展

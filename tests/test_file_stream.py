@@ -76,8 +76,9 @@ async def test_upload():
              "sha256": "abc"},
         ])
         api = ApiClient(ws)
+        files = FileManager(api)
         progress = []
-        result = await api.upload_file_stream(
+        result = await files.upload_file_stream(
             str(path), chunk_size=4, retention=1000,
             on_progress=lambda sent, total: progress.append((sent, total)))
         check("上传完成返回服务端结果",
@@ -108,8 +109,9 @@ async def test_upload():
             {"status": "file_complete", "file_path": "/srv/g.bin"},
         ])
         api = ApiClient(ws)
-        await api.upload_file_stream(str(path), chunk_size=4,
-                                     expected_sha256="deadbeef")
+        files = FileManager(api)
+        await files.upload_file_stream(str(path), chunk_size=4,
+                                       expected_sha256="deadbeef")
         first = ws.calls[0]["params"]
         check("expected_sha256 透传", first.get("expected_sha256") == "deadbeef",
               str(first))
@@ -123,7 +125,8 @@ async def test_upload():
             {"status": "file_complete", "file_path": "/srv/h.bin"},
         ])
         api = ApiClient(ws)
-        result = await api.upload_file_stream(str(path), chunk_size=2)
+        files = FileManager(api)
+        result = await files.upload_file_stream(str(path), chunk_size=2)
         # 6 字节 / 2 = 3 块；末块只回 chunk_received → 再补一次 is_complete
         check("服务端未在末块完成时补发 is_complete",
               len(ws.calls) == 4 and ws.calls[-1]["params"].get("is_complete") is True,
@@ -146,7 +149,8 @@ async def test_download():
     ]
     ws = FakeWs(events=events)
     api = ApiClient(ws)
-    chunks = [c async for c in api.download_file_stream(
+    files = FileManager(api)
+    chunks = [c async for c in files.download_file_stream(
         file="http://example.com/x.bin", chunk_size=4096)]
     check("按分片产出字节", chunks == [b"hello", b"world"], repr(chunks))
     sent = ws.stream_calls[0]
@@ -157,13 +161,14 @@ async def test_download():
 
     ws2 = FakeWs(events=events)
     api2 = ApiClient(ws2)
-    got = [e async for e in api2.iter_file_stream(file_id="fid")]
+    files2 = FileManager(api2)
+    got = [e async for e in files2.iter_file_stream(file_id="fid")]
     check("iter_file_stream 产出全部事件", len(got) == 4
           and got[0]["data_type"] == "file_info", str([e.get("data_type") for e in got]))
 
     ws3 = FakeWs(events=events)
     api3 = ApiClient(ws3)
-    await anext(api3.download_file_record_stream(file="v.amr", out_format="amr"))
+    await anext(FileManager(api3).download_file_record_stream(file="v.amr", out_format="amr"))
     check("语音流带 out_format",
           ws3.stream_calls[0]["action"] == "download_file_record_stream"
           and ws3.stream_calls[0]["params"].get("out_format") == "amr",
@@ -171,15 +176,16 @@ async def test_download():
 
     ws4 = FakeWs(events=events)
     api4 = ApiClient(ws4)
-    await anext(api4.download_file_image_stream(file="p.png"))
+    await anext(FileManager(api4).download_file_image_stream(file="p.png"))
     check("图片流走 download_file_image_stream",
           ws4.stream_calls[0]["action"] == "download_file_image_stream",
           str(ws4.stream_calls[0]))
 
     ws5 = FakeWs(events=[{"type": "error", "data_type": "error"}])
     api5 = ApiClient(ws5)
+    files5 = FileManager(api5)
     try:
-        [c async for c in api5.download_file_stream(file="x")]
+        [c async for c in files5.download_file_stream(file="x")]
     except ApiError:
         check("错误包抛 ApiError", True)
     else:
@@ -259,7 +265,25 @@ async def test_ws_routing():
           ws._streams["e2"].get_nowait() is None)
 
 
+def test_surface():
+    print("\n[0] ApiClient 隐藏文件接口")
+    hidden = ("get_image", "get_record", "get_file", "upload_group_file",
+              "download_file_stream", "upload_file_stream", "iter_file_stream",
+              "clean_stream_temp_file", "send_online_file", "get_fileset_id")
+    check("ApiClient 不再有文件接口",
+          all(not hasattr(ApiClient, name) for name in hidden), "")
+    check("FileManager 提供同名文件接口",
+          all(hasattr(FileManager, name) for name in hidden), "")
+    try:
+        ApiClient(None).upload_file_stream
+    except AttributeError as exc:
+        check("旧名字提示迁移到 FileManager", "FileManager" in str(exc), str(exc))
+    else:
+        check("旧名字提示迁移到 FileManager", False, "没有抛 AttributeError")
+
+
 async def main() -> int:
+    test_surface()
     await test_upload()
     await test_download()
     await test_file_manager()

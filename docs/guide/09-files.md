@@ -2,8 +2,11 @@
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[使用指南](README.md) · 上一章：[插件开发](08-plugin-dev.md) · 下一章：[定时事件](10-timers.md)
 
-文件相关接口都走 NapCat 的**流式文件 API**：下载分片经 WebSocket 传回、边收边写；
-上传把本地文件分块发给 NapCat，不需要框架与 NapCat 共享文件系统（远程部署也能用）。
+仅 `FileManager` 提供文件接口（`ApiClient` 里的文件方法已隐藏，直接访问会提示改用 `self.files`）。
+
+文件接口统一由 `FileManager` 提供：下载/上传走 NapCat 的**流式文件 API**（分片经
+WebSocket 传回、边收边写；上传分块发送，不需要共享文件系统），群文件、闪传、
+在线文件走各自的 action。`ApiClient` 不再公开文件方法。
 
 > 示例号码均为虚构。
 

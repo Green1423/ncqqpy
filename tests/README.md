@@ -29,8 +29,8 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_docs.py` | 文档链接/锚点/索引可达/篇幅 |
 | `test_docstrings.py` | docstring 规范（摘要 / 段落 / 核心 API Args） |
 | `test_watchdog_online.py` | 看门狗：启动已在线跳过 / 掉线观察期 / 健康检查降噪 |
-| `test_api_coverage.py` | API 覆盖：官方 178 个 action / 字段名回归 |
-| `test_file_stream.py` | 流式文件：分块上传 / 流式下载 / FileManager / 多包路由 |
+| `test_api_coverage.py` | API 覆盖：官方 178 个 action / 字段名回归 / 文件接口收口 |
+| `test_file_stream.py` | 流式文件：分块上传 / 流式下载 / FileManager / 多包路由 / 接口隐藏 |
 | `test_multiline.py` | 多行字符串（"""…""" 原始内容 / 错误提示 / Schema 端到端） |
 | `test_subscribe.py` | 订阅名单（parse_ids / 群·私聊·小窗判定 / 会话例外） |
 | `test_persist.py` | 本地 JSON 状态（原子写 / 按数量与按引用清理） |

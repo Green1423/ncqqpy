@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from napcat.api import ApiClient                            # noqa: E402
+from napcat.file_manager import FileManager                    # noqa: E402
 
 PASSED = 0
 FAILED = 0
@@ -221,19 +222,23 @@ OFFICIAL_ACTIONS = (
 
 
 def api_actions() -> dict[str, str]:
-    """解析 api.py：action → 方法名。"""
-    tree = ast.parse((ROOT / "napcat" / "api.py").read_text(encoding="utf-8"))
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ApiClient")
+    """解析 api.py + file_manager.py：action → 方法名。"""
     out: dict[str, str] = {}
-    for fn in cls.body:
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name.startswith("_"):
-            continue
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                    and node.func.attr in ("_call", "_stream_packets", "_download_bytes") \
-                    and node.args \
-                    and isinstance(node.args[0], ast.Constant):
-                out.setdefault(str(node.args[0].value), fn.name)
+    for rel, cls_name in (("napcat/api.py", "ApiClient"),
+                          ("napcat/file_manager.py", "FileManager")):
+        tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body
+                   if isinstance(n, ast.ClassDef) and n.name == cls_name)
+        for fn in cls.body:
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                    or fn.name.startswith("_"):
+                continue
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                        and node.func.attr in ("_call", "_stream_packets", "_download_bytes") \
+                        and node.args \
+                        and isinstance(node.args[0], ast.Constant):
+                    out.setdefault(str(node.args[0].value), fn.name)
     return out
 
 
@@ -264,10 +269,28 @@ class _FakeWs:
         return _Result()
 
 
+def test_surface():
+    print("\n[0] ApiClient 隐藏文件接口")
+    hidden = ("get_image", "get_record", "get_file", "upload_group_file",
+              "download_file_stream", "upload_file_stream", "clean_stream_temp_file")
+    check("ApiClient 不再暴露文件接口",
+          all(not hasattr(ApiClient, name) for name in hidden), "")
+    check("FileManager 暴露文件接口",
+          all(hasattr(FileManager, name) for name in hidden), "")
+    try:
+        ApiClient(_FakeWs()).get_image
+    except AttributeError as exc:
+        check("旧名字提示迁移到 FileManager",
+              "FileManager" in str(exc) and "files.get_image" in str(exc), str(exc))
+    else:
+        check("旧名字提示迁移到 FileManager", False, "没有抛 AttributeError")
+
+
 async def test_params():
     print("\n[2] 易错字段名")
     ws = _FakeWs()
     api = ApiClient(ws)
+    files = FileManager(api)
 
     async def call(coro):
         try:
@@ -287,12 +310,12 @@ async def test_params():
     check("set_self_longnick 用 official 的 longNick",
           payload["params"].get("longNick") == "签名", str(payload))
 
-    payload = await call(api.send_online_file("10001", "/tmp/a.txt", "a.txt"))
+    payload = await call(files.send_online_file("10001", "/tmp/a.txt", "a.txt"))
     check("send_online_file 字段 user_id/file_path/file_name",
           payload["params"] == {"user_id": "10001", "file_path": "/tmp/a.txt",
                                   "file_name": "a.txt"}, str(payload))
 
-    payload = await call(api.send_flash_msg("set_1", user_id="10001"))
+    payload = await call(files.send_flash_msg("set_1", user_id="10001"))
     check("send_flash_msg 用 fileset_id",
           payload["params"].get("fileset_id") == "set_1"
           and "fileSetId" not in payload["params"], str(payload))
@@ -306,7 +329,7 @@ async def test_params():
     check("get_ai_characters 带 chat_type",
           payload["params"].get("chat_type") == 1, str(payload))
 
-    payload = await call(api.get_record(file="f"))
+    payload = await call(files.get_record(file="f"))
     check("get_record 带官方必填 out_format",
           payload["params"].get("out_format") == "mp3", str(payload))
 
@@ -351,7 +374,7 @@ async def test_params():
           "title" not in payload["params"]
           and payload["params"].get("content") == "正文", str(payload))
 
-    payload = await call(api.upload_group_file("100002", "/f", "n"))
+    payload = await call(files.upload_group_file("100002", "/f", "n"))
     check("upload_group_file 默认 upload_file=True",
           payload["params"].get("upload_file") is True, str(payload))
 
@@ -362,6 +385,7 @@ async def test_params():
 
 async def main() -> int:
     test_coverage()
+    test_surface()
     await test_params()
     print(f"\n{'=' * 52}\n通过 {PASSED} / 失败 {FAILED}")
     return 1 if FAILED else 0

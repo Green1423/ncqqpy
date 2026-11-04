@@ -2,7 +2,8 @@
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[定时任务](10-timers.md) · 下一章：[完整插件示例](12-example.md)
 
-插件通过 `self.files`（`FileManager`）使用 NapCat 的流式文件接口。下载分片经
+插件通过 `self.files`（`FileManager`）使用 NapCat 的流式文件接口。
+`ApiClient` 不公开文件方法（旧名字会提示迁移）；插件只通过 `self.files` 访问文件能力。下载分片经
 WebSocket 传回、边收边写；上传分块发到 NapCat，返回服务器侧文件信息。
 不需要框架和 NapCat 共享文件系统。
 
@@ -55,6 +56,6 @@ await self.files.clean_temp()          # 清理 NapCat 侧流式临时文件
 sha = await self.files.file_sha256("./report.pdf")
 ```
 
-> 低层接口也可以直接用：`self.api.download_file_stream(...)` 是异步字节迭代器，
-> `self.api.iter_file_stream(...)` 会产出 `file_info` / `file_chunk` /
+> 低层接口也可以直接用：`self.files.download_file_stream(...)` 是异步字节迭代器，
+> `self.files.iter_file_stream(...)` 会产出 `file_info` / `file_chunk` /
 > `file_complete` 事件（Base64 分片）。

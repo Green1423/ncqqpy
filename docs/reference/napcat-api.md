@@ -2,9 +2,10 @@
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[参考文档](README.md)
 
-`napcat/api.py` 的公开方法覆盖 [NapCat 官方接口文档](https://napcat.apifox.cn/llms.txt) 的全部 **178 个 action**。字段名与官方一致（如 `set`、`longNick`、`fileset_id`、`file_path`、`character`）；`tests/test_api_coverage.py` 会检查覆盖率与易错字段，接口增删时同步更新该测试。
+`ApiClient` + `FileManager` 覆盖 [NapCat 官方接口文档](https://napcat.apifox.cn/llms.txt) 的全部 **178 个 action**。字段名与官方一致（如 `set`、`longNick`、`fileset_id`、`file_path`、`character`）；`tests/test_api_coverage.py` 会检查覆盖率与易错字段，接口增删时同步更新该测试。
 
-调用方式：`await self.api.<方法>(...)`；返回值是响应里的 `data` 字段（失败抛 `ApiError`）。
+调用方式：普通 action 用 `await self.api.<方法>(...)`；**文件类 action 在 `FileManager`**，用 `await self.files.<方法>(...)`（`ApiClient` 已隐藏这些名字，旧写法会提示迁移）。
+返回值是响应里的 `data` 字段（失败抛 `ApiError`）。
 
 ## 流式文件接口（`FileManager`）
 
@@ -25,11 +26,11 @@ WebSocket 消息：
 对使用者来说不需要自己处理这些包：
 
 ```python
-async for chunk in api.download_file_stream(file=url): ...
-await api.upload_file_stream("./big.zip", on_progress=...)
+async for chunk in files.download_file_stream(file=url): ...
+await files.upload_file_stream("./big.zip", on_progress=...)
 ```
 
-`FileManager` 在 `ApiClient` 之上提供 `download_to_file` / `download_bytes` /
+`FileManager` 在低层 action 之上提供 `download_to_file` / `download_bytes` /
 `upload_stream` / `clean_temp`，见 [文件管理](../guide/09-files.md)。
 
 ## AI
@@ -48,19 +49,19 @@ await api.upload_file_stream("./big.zip", on_progress=...)
 | `send_group_notice` | `_send_group_notice` | 发送群公告 |
 | `set_model_show` | `_set_model_show` | 设置机型 |
 | `check_url_safely` | `check_url_safely` | 检查URL安全性 |
-| `create_group_file_folder` | `create_group_file_folder` | 创建群文件目录 |
+| `files.create_group_file_folder` | `create_group_file_folder` | 创建群文件目录 |
 | `delete_friend` | `delete_friend` | 删除好友 |
-| `delete_group_file` | `delete_group_file` | 删除群文件 |
-| `delete_group_folder` | `delete_group_folder` | 删除群文件目录 |
-| `download_file` | `download_file` | 下载文件 |
+| `files.delete_group_file` | `delete_group_file` | 删除群文件 |
+| `files.delete_group_folder` | `delete_group_folder` | 删除群文件目录 |
+| `files.download_file` | `download_file` | 下载文件 |
 | `get_forward_msg` | `get_forward_msg` | 获取合并转发消息 |
 | `get_friend_msg_history` | `get_friend_msg_history` | 获取好友历史消息 |
 | `get_group_at_all_remain` | `get_group_at_all_remain` | 获取群艾特全体剩余次数 |
-| `get_group_file_system_info` | `get_group_file_system_info` | 获取群文件系统信息 |
-| `get_group_files_by_folder` | `get_group_files_by_folder` | 获取群文件夹文件列表 |
+| `files.get_group_file_system_info` | `get_group_file_system_info` | 获取群文件系统信息 |
+| `files.get_group_files_by_folder` | `get_group_files_by_folder` | 获取群文件夹文件列表 |
 | `get_group_honor_info` | `get_group_honor_info` | 获取群荣誉信息 |
 | `get_group_msg_history` | `get_group_msg_history` | 获取群历史消息 |
-| `get_group_root_files` | `get_group_root_files` | 获取群根目录文件列表 |
+| `files.get_group_root_files` | `get_group_root_files` | 获取群根目录文件列表 |
 | `get_online_clients` | `get_online_clients` | 获取在线客户端 |
 | `get_stranger_info` | `get_stranger_info` | 获取陌生人信息 |
 | `send_forward_msg` | `send_forward_msg` | 发送合并转发消息 |
@@ -68,8 +69,8 @@ await api.upload_file_stream("./big.zip", on_progress=...)
 | `send_private_forward_msg` | `send_private_forward_msg` | 发送私聊合并转发消息 |
 | `set_group_portrait` | `set_group_portrait` | 设置群头像 |
 | `set_qq_profile` | `set_qq_profile` | 设置QQ资料 |
-| `upload_group_file` | `upload_group_file` | 上传群文件 |
-| `upload_private_file` | `upload_private_file` | 上传私聊文件 |
+| `files.upload_group_file` | `upload_group_file` | 上传群文件 |
+| `files.upload_private_file` | `upload_private_file` | 上传私聊文件 |
 
 ## 扩展接口
 
@@ -92,33 +93,33 @@ await api.upload_file_stream("./big.zip", on_progress=...)
 
 | 方法 | action | 说明 |
 |------|--------|------|
-| `cancel_online_file` | `cancel_online_file` | 取消在线文件 |
-| `create_flash_task` | `create_flash_task` | 创建闪传任务 |
-| `download_fileset` | `download_fileset` | 下载文件集 |
-| `get_fileset_id` | `get_fileset_id` | 获取文件集 ID |
-| `get_fileset_info` | `get_fileset_info` | 获取文件集信息 |
-| `get_flash_file_list` | `get_flash_file_list` | 获取闪传文件列表 |
-| `get_flash_file_url` | `get_flash_file_url` | 获取闪传文件链接 |
-| `get_online_file_msg` | `get_online_file_msg` | 获取在线文件消息 |
-| `get_share_link` | `get_share_link` | 获取文件分享链接 |
-| `move_group_file` | `move_group_file` | 移动群文件 |
-| `receive_online_file` | `receive_online_file` | 接收在线文件 |
-| `refuse_online_file` | `refuse_online_file` | 拒绝在线文件 |
-| `rename_group_file` | `rename_group_file` | 重命名群文件 |
-| `send_flash_msg` | `send_flash_msg` | 发送闪传消息 |
-| `send_online_file` | `send_online_file` | 发送在线文件 |
-| `send_online_folder` | `send_online_folder` | 发送在线文件夹 |
-| `trans_group_file` | `trans_group_file` | 传输群文件 |
+| `files.cancel_online_file` | `cancel_online_file` | 取消在线文件 |
+| `files.create_flash_task` | `create_flash_task` | 创建闪传任务 |
+| `files.download_fileset` | `download_fileset` | 下载文件集 |
+| `files.get_fileset_id` | `get_fileset_id` | 获取文件集 ID |
+| `files.get_fileset_info` | `get_fileset_info` | 获取文件集信息 |
+| `files.get_flash_file_list` | `get_flash_file_list` | 获取闪传文件列表 |
+| `files.get_flash_file_url` | `get_flash_file_url` | 获取闪传文件链接 |
+| `files.get_online_file_msg` | `get_online_file_msg` | 获取在线文件消息 |
+| `files.get_share_link` | `get_share_link` | 获取文件分享链接 |
+| `files.move_group_file` | `move_group_file` | 移动群文件 |
+| `files.receive_online_file` | `receive_online_file` | 接收在线文件 |
+| `files.refuse_online_file` | `refuse_online_file` | 拒绝在线文件 |
+| `files.rename_group_file` | `rename_group_file` | 重命名群文件 |
+| `files.send_flash_msg` | `send_flash_msg` | 发送闪传消息 |
+| `files.send_online_file` | `send_online_file` | 发送在线文件 |
+| `files.send_online_folder` | `send_online_folder` | 发送在线文件夹 |
+| `files.trans_group_file` | `trans_group_file` | 传输群文件 |
 
 ## 文件接口
 
 | 方法 | action | 说明 |
 |------|--------|------|
-| `get_file` | `get_file` | 获取文件 |
-| `get_group_file_url` | `get_group_file_url` | 获取群文件URL |
-| `get_image` | `get_image` | 获取图片 |
-| `get_private_file_url` | `get_private_file_url` | 获取私聊文件URL |
-| `get_record` | `get_record` | 获取语音 |
+| `files.get_file` | `get_file` | 获取文件 |
+| `files.get_group_file_url` | `get_group_file_url` | 获取群文件URL |
+| `files.get_image` | `get_image` | 获取图片 |
+| `files.get_private_file_url` | `get_private_file_url` | 获取私聊文件URL |
+| `files.get_record` | `get_record` | 获取语音 |
 
 ## 核心接口
 
@@ -135,17 +136,17 @@ await api.upload_file_stream("./big.zip", on_progress=...)
 
 | 方法 | action | 说明 |
 |------|--------|------|
-| `clean_stream_temp_file` | `clean_stream_temp_file` | 清理流式传输临时文件 |
-| `download_file_image_stream` | `download_file_image_stream` | 下载图片文件流 |
-| `download_file_record_stream` | `download_file_record_stream` | 下载语音文件流 |
-| `test_download_stream` | `test_download_stream` | 测试下载流 |
+| `files.clean_stream_temp_file` | `clean_stream_temp_file` | 清理流式传输临时文件 |
+| `files.download_file_image_stream` | `download_file_image_stream` | 下载图片文件流 |
+| `files.download_file_record_stream` | `download_file_record_stream` | 下载语音文件流 |
+| `files.test_download_stream` | `test_download_stream` | 测试下载流 |
 
 ## 流式接口
 
 | 方法 | action | 说明 |
 |------|--------|------|
-| `download_file_stream` | `download_file_stream` | 下载文件流 |
-| `upload_file_stream` | `upload_file_stream` | 上传文件流 |
+| `files.download_file_stream` | `download_file_stream` | 下载文件流 |
+| `files.upload_file_stream` | `upload_file_stream` | 上传文件流 |
 
 ## 消息扩展
 
