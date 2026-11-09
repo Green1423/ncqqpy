@@ -9,7 +9,7 @@ import re
 import shlex
 import inspect
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Callable, Optional, Any, Type
 from zoneinfo import ZoneInfo
 
@@ -250,10 +250,10 @@ class DatetimeField(BaseField):
         try:
             if len(normalized) == 10:
                 day = date.fromisoformat(normalized)
-                moment = datetime(day.year, day.month, day.day,
-                                  23, 59, 0, 0)
+                moment = datetime.combine(day, time.max)
             else:
-                moment = datetime.fromisoformat(normalized)
+                moment = datetime.fromisoformat(
+                    normalized.replace("Z", "+00:00"))
         except (TypeError, ValueError) as exc:
             raise ValidationError(
                 "时间格式不对，请写 2026-11-10 18:00"
