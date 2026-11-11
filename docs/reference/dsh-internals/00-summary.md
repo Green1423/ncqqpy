@@ -8,7 +8,7 @@
    pass-through; the comment says so and names the removed feature (`dsh-session/lib/types/surface.js:80-87`).
 2. **Wrapping exists only where a producer bakes it into its own content**, e.g. workspace
    instructions in `<system-reminder>…</system-reminder>` (`dsh-agent-instructions/lib/index.js:111-116`,
-   `256-266`) and the skill catalog (`dsh-tool-skill/lib/index.js:238-261`).
+   `256-266`) and the redirect catalog (`dsh-tool-redirect/lib/index.js:238-261`).
 3. **"Injected context" is distinguished from "the user is asking" by `source`, not by text.**
    `Message.source.kind` is one of `user | plugin | model | tool`, with plugin producers additionally
    declaring a `form` (`instructions | catalog | snapshot | notice | relay | recall`)

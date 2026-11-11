@@ -25,7 +25,7 @@
 | `plugin_module_name(name)` | 新增（模块函数） | `sys.modules` 里的模块名（`napcat_plugin_<名>`），加载/清理/热重载共用 |
 | `CommandManager.set_disabled(name, disabled=None)` | 新增 | 命令启停的唯一入口；`disabled=None` 表示取反。`/pause command` 与 `PluginBase.pause_command` 都走它 |
 | `TimerManager.cancel(name)` | 返回值变更 | 原来恒返回 `None`，现在返回 `bool`（该任务原本是否存在） |
-| `napcat.skills.NamedRegistry` | 新增（基类） | 技能表与工具表共用的骨架：`qualify` / `list` / `get` / `unregister` / `unregister_plugin`；`SkillRegistry` 与 `ToolRegistry` 都继承它 |
+| `napcat.redirect.NamedRegistry` | 新增（基类） | 重定向表与工具表共用的骨架：`qualify` / `list` / `get` / `unregister` / `unregister_plugin`；`RedirectRegistry` 与 `ToolRegistry` 都继承它 |
 | `qualify_name(plugin, name)` / `tool_name_for(name)` | 新增（模块函数） | 命名空间归一化（`插件名.名字`）与「暴露给模型的函数名」的唯一实现 |
 
 ## 3. 行为变更（对外可见）
@@ -40,11 +40,11 @@
 | **定时任务 API 收敛**：删掉 `PluginBase.stop_timer` / `pause_timer` / `resume_timer` / `cancel_schedule` | 这 4 个方法只是 `self.timer` 的同名转发（原来还有两个名字做同一件事）。现在**注册**用 `self.schedule` / `self.schedule_at`（带归属，卸载自动取消），**管理**用 `self.timer.cancel/pause_timer/resume_timer` | 把 `self.stop_timer(x)` 改成 `self.timer.cancel(x)`、`self.pause_timer(x)` 改成 `self.timer.pause_timer(x)`、`self.cancel_schedule(x)` 改成 `self.timer.cancel(x)` |
 | `self.schedule` / `self.schedule_at` 补 `description` 参数 | 插件注册的定时任务现在能在 `/timers` 里显示说明 | 无 |
 | `self.schedule` 的排程文档修正 | 语义一直是**固定频率**（按绝对时刻、耗时不计入周期）；原文档写成「本轮执行结束再计时」，与实现不符 | 无（按固定频率使用即可） |
-| 加载失败 / 启用失败 / 卸载共用同一套拆卸 | 三条路径都会撤销该插件注册的**命令、技能、工具、事件处理器、定时任务与连接回调**；失败后不再留残留 | 无（插件里不必再自己写清理） |
+| 加载失败 / 启用失败 / 卸载共用同一套拆卸 | 三条路径都会撤销该插件注册的**命令、重定向、工具、事件处理器、定时任务与连接回调**；失败后不再留残留 | 无（插件里不必再自己写清理） |
 | 内置 `/plugins` 命令移除，并入 `plugin_manager` 的 `/plugin list` | `/plugins` 改为 `plugin_manager` 注册的**等价别名**（同一渲染器、`superuser + private`）；框架不再提供「任何人可用」的插件列表 | 需要普通用户看插件列表的场景没有了；受限用户请改用服务范围内的功能 |
 | `plugin_manager` 的 `/plugin list` 合并原 `/plugins` | 一次列出「已安装（✓/✗/⛔ + 版本 + 依赖 + 来源）」与「可安装」；`/plugins` 输出与它完全一致 | 无（脚本里解析输出的话注意分段标题变了） |
 | 热重载只清理一次模块子树 | 语义不变（`reload()` 不再重复摘 `sys.modules`） | 无 |
-| 技能表与工具表共用 `NamedRegistry` | `list(exclude=...)` 统一为 `exclude: str = ""`（空串 = 不过滤）；技能同名覆盖、工具同名拒绝的语义**保持不变** | 只用公开方法则无影响 |
+| 重定向表与工具表共用 `NamedRegistry` | `list(exclude=...)` 统一为 `exclude: str = ""`（空串 = 不过滤）；重定向同名覆盖、工具同名拒绝的语义**保持不变** | 只用公开方法则无影响 |
 | `plugin_manager`：插件根目录改名 `plugins_root` | 基类 `plugin_dir` 恢复「插件自己的目录」语义（`plugins/<名>/`） | 只有读过该插件内部属性的人需要改 |
 | `plugin_manager`：列表文件缓存只剩客户端一层 | 客户端 TTL + ETag 决定「要不要问、问得多便宜」，磁盘副本只做离线兜底 | 无 |
 | `plugin_manager`：`/plugin install` 的「已经装过」改为后台回执 | 命令先回「⏳ 开始」，失败原因随后走私聊回执（唯一判定在 `Installer`） | 无 |

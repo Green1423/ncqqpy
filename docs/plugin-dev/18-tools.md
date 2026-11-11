@@ -1,10 +1,10 @@
 # 十八、工具（给 AI 用，**结果回给模型**）
 
-> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[技能](17-skills.md) · 下一章：[渲染](19-render.md) · 相关：[ai_chat 的工具](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/08-tools.md)
+> 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[重定向](17-redirect.md) · 下一章：[渲染](19-render.md) · 相关：[ai_chat 的工具](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/08-tools.md)
 
 插件有两条路把自己的能力交给 AI。**先选对通道**，两者的语义完全不同：
 
-| | 技能 `register_skill` | 工具 `register_tool` |
+| | 重定向 `register_redirect` | 工具 `register_tool` |
 |---|---|---|
 | 本质 | **命令映射**（`byrdocs.search`） | 一段**自己写的 handler** |
 | 参数 | 从 `CommandSchema` 取 | 自己给 JSON Schema |
@@ -68,7 +68,7 @@ class DemoPlugin(PluginBase):
 
 ## 18.3 生命周期
 
-卸载、禁用、热重载时框架按插件名**整批撤销**（与技能同一套位置）。所以：
+卸载、禁用、热重载时框架按插件名**整批撤销**（与重定向同一套位置）。所以：
 
 - 不要自己保存 handler 指针给别的插件用 —— 拿 `tool_name` 让消费侧去查；
 - 重载后模型工具表**自动**更新（消费侧每轮重读，不是快照）。
@@ -143,8 +143,8 @@ async def lookup(args: dict, ctx=None) -> str:
 
 ## 18.7 消费侧怎么区分两者
 
-ai_chat 把 `## 可用能力` 分成**工具 / 技能**两组，并附一段选择依据；分组由
-`Tool.delegates` 自动决定 —— 提供方只管选 `register_skill` 还是 `register_tool`。
+ai_chat 把 `## 可用能力` 分成**工具 / 重定向**两组，并附一段选择依据；分组由
+`Tool.delegates` 自动决定 —— 提供方只管选 `register_redirect` 还是 `register_tool`。
 
 完整提示词长什么样、为什么这么写，见插件自己的文档：
 [plugins/ai_chat/docs/08-tools.md](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/08-tools.md)。

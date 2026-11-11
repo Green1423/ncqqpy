@@ -3748,13 +3748,13 @@ async def test_targets_commands(tmp: Path):
           "_not_found" not in out and "已保存" in out, repr(out)[:60])
 
 
-async def test_skills(tmp: Path):
-    print("\n[27] ai_chat 技能：命令映射（只读面是否补齐）")
+async def test_redirects(tmp: Path):
+    print("\n[27] ai_chat 重定向：命令映射（只读面是否补齐）")
     from napcat.command import CommandManager
     from napcat.permission import PermissionManager
     from plugins.bupt_news.main import BuptNewsPlugin
 
-    d = tmp / "skills"
+    d = tmp / "redirects"
     d.mkdir(parents=True, exist_ok=True)
     perm = PermissionManager()
     perm.set_superusers([1])
@@ -3769,14 +3769,14 @@ async def test_skills(tmp: Path):
                                               "enabled": False}}}))
     await plugin.on_load()
     timer.start()
-    await plugin.on_enable()        # 技能在 on_enable 里注册（命令也是）
+    await plugin.on_enable()        # 重定向在 on_enable 里注册（命令也是）
     cmds = plugin.cmds
-    skills = {s.name: s for s in plugin.skills.list()}
+    redirects = {s.name: s for s in plugin.redirects.list()}
     # 只挂 3 条：pin/status **故意不挂** —— `pin` 不带参数时列置顶，
     # 与 list 语义重叠，实测模型会拿它回答「p1 的详情」，回来一串清单。
-    check("★ 注册了 3 个技能（只读、语义不重叠）",
-          set(skills) == {"bupt_news.search", "bupt_news.recent",
-                          "bupt_news.notice"}, str(sorted(skills)))
+    check("★ 注册了 3 个重定向（只读、语义不重叠）",
+          set(redirects) == {"bupt_news.search", "bupt_news.recent",
+                          "bupt_news.notice"}, str(sorted(redirects)))
 
     expected = {
         "bupt_news.search": "buptnews.search",
@@ -3784,21 +3784,21 @@ async def test_skills(tmp: Path):
         "bupt_news.notice": "buptnews.get",
     }
     for not_hung in ("bupt_news.pins", "bupt_news.status"):
-        check(f"★ 不挂语义重叠/管理类技能（{not_hung}）",
-              not_hung not in skills, str(sorted(skills)))
-    check("★ 每个技能都带「什么时候该用我」的说明",
-          all("【仅在" in (sk.description or "") for sk in skills.values()),
-          str({k: (sk.description or "")[:12] for k, sk in skills.items()}))
-    check("★ 每个技能都映射到本插件的真实命令",
-          all(skills[k].command == v for k, v in expected.items()),
-          str({k: skills[k].command for k in skills}))
+        check(f"★ 不挂语义重叠/管理类重定向（{not_hung}）",
+              not_hung not in redirects, str(sorted(redirects)))
+    check("★ 每个重定向都带「什么时候该用我」的说明",
+          all("【仅在" in (sk.description or "") for sk in redirects.values()),
+          str({k: (sk.description or "")[:12] for k, sk in redirects.items()}))
+    check("★ 每个重定向都映射到本插件的真实命令",
+          all(redirects[k].command == v for k, v in expected.items()),
+          str({k: redirects[k].command for k in redirects}))
     check("★ 映射的命令都能解析到（不会暴露死工具）",
-          all(cmds.find_command(skills[k].command) for k in expected),
-          str([k for k in expected if not cmds.find_command(skills[k].command)]))
+          all(cmds.find_command(redirects[k].command) for k in expected),
+          str([k for k in expected if not cmds.find_command(redirects[k].command)]))
     import re as _re
     check("★ 工具名合法（OpenAI 函数名约束）",
-          all(_re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sk.tool_name) for sk in skills.values()),
-          str([sk.tool_name for sk in skills.values()]))
+          all(_re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sk.tool_name) for sk in redirects.values()),
+          str([sk.tool_name for sk in redirects.values()]))
 
     # 参数 schema 从命令的 Schema 翻译，不另写一份
     from plugins.ai_chat.tools import command_tool_schema
@@ -3817,10 +3817,10 @@ async def test_skills(tmp: Path):
     for forbidden in ("buptnews.add", "buptnews.set", "buptnews.del",
                       "buptnews.dektoken", "buptnews.on", "buptnews.off",
                       "buptnews.interval", "buptnews.sync", "buptnews.images"):
-        check(f"写操作 {forbidden} 没有被挂成技能",
-              forbidden not in {sk.command for sk in skills.values()}, "")
+        check(f"写操作 {forbidden} 没有被挂成重定向",
+              forbidden not in {sk.command for sk in redirects.values()}, "")
 
-    # 权限：技能只是映射，判定仍由命令系统做（普通用户拿不到 superuser 命令）
+    # 权限：重定向只是映射，判定仍由命令系统做（普通用户拿不到 superuser 命令）
     from napcat.command import CommandPacket
     from napcat.models import MessageEvent
     ev = MessageEvent(message_type="private", user_id=100000999,
@@ -3873,7 +3873,7 @@ async def main():
     await test_portal_search(tmp)
     await test_afterclass(tmp)
     await test_targets_commands(tmp)
-    await test_skills(tmp)
+    await test_redirects(tmp)
     await _cleanup_artifacts()
     print(f"\n===== 通过 {PASSED} 项，失败 {FAILED} 项 =====")
     return 1 if FAILED else 0

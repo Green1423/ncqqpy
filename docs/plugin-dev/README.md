@@ -24,7 +24,7 @@
 | [插件包结构：注册与逻辑分离](14-layout.md) | 14.1 目录 · 14.2 注册：`plugin.py`（没有逻辑） · 14.3 逻辑：`commands/chat.py` · 14.4 逻辑：`events/` 与 `jobs/` … |
 | [配置管理](15-config.md) | 15.1 config.json · 15.2 bind / unbind 自动持久化 · 15.3 插件配置 · 15.4 ConfigManager API |
 | [错误处理与用户反馈](16-errors.md) | 16.1 三种写法，按你掌握的信息量选 · 16.2 错误类型速查（`from napcat.errors import ...`） · 16.3 框架怎么反馈 · 16.4 配置（`config.json` 顶层） … |
-| [技能（把能力交给 AI 用）](17-skills.md) | 17.1 规矩 · 17.2 由谁把结果发给用户 · 17.3 消费方 · 17.4 调试 · 17.5 `prompt_hint` |
+| [重定向（把能力交给 AI 用）](17-redirect.md) | 17.1 规矩 · 17.2 由谁把结果发给用户 · 17.3 消费方 · 17.4 调试 · 17.5 `prompt_hint` |
 | [工具（结果回给模型）](18-tools.md) | 18.1 注册 · 18.2 权限与作用域 · 18.3 生命周期 · 18.4 调试 · 18.5 拿到调用者 · 18.6 prompt_hint |
 | [渲染：Markdown 与 HTML 出图](19-render.md) | 19.1 `napcat.markdown` · 19.2 `napcat.render`（Chromium） · 19.3 什么时候用 · 19.4 常见坑 |
 | [服务范围：只服务名单里的人](20-subscribe.md) | 20.1 四条规矩 · 20.2 接进插件 · 20.3 判定 API · 20.4 三种上下文 · 20.5 按会话例外 · 20.6 名单维护 … |

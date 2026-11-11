@@ -3,7 +3,7 @@
 从**仓库根**执行（`python -B` 关掉 __pycache__）：
 
 ```bash
-for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py test_unicode_names.py test_bool_short_flags.py test_docs.py test_docstrings.py test_watchdog_online.py test_api_coverage.py test_file_stream.py test_multiline.py test_subscribe.py test_persist.py; do ./venv/bin/python -B tests/$t; done
+for t in test_watchdog.py test_command_parser.py test_help_structure.py test_command_permissions.py test_plugin_errors.py test_plugin_config.py test_plugin_deps.py test_timer.py test_message.py test_store.py test_plugin_layout.py test_plugin_registry.py test_plugin_ws_decoupling.py test_userperm.py test_public_api.py test_command_alias.py test_unicode_names.py test_bool_short_flags.py test_docs.py test_docstrings.py test_watchdog_online.py test_api_coverage.py test_file_stream.py test_multiline.py test_subscribe.py test_persist.py test_redirect.py; do ./venv/bin/python -B tests/$t; done
 ```
 
 | 套件 | 覆盖 |
@@ -34,6 +34,7 @@ for t in test_watchdog.py test_command_parser.py test_help_structure.py test_com
 | `test_multiline.py` | 多行字符串（"""…""" 原始内容 / 错误提示 / Schema 端到端） |
 | `test_subscribe.py` | 订阅名单（parse_ids / 群·私聊·小窗判定 / 会话例外） |
 | `test_persist.py` | 本地 JSON 状态（原子写 / 按数量与按引用清理） |
+| `test_redirect.py` | 重定向通道：命令映射 / schema 复用 / 桥 / 过滤 / 委派执行 |
 
 ## 依赖插件的用例会自动跳过
 

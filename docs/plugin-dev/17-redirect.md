@@ -1,17 +1,17 @@
-# 十七、技能（把你的**命令**交给 AI 用）
+# 十七、重定向（把你的**命令**交给 AI 用）
 
 > 文档索引：[docs/README.md](../README.md) · 上级：[插件开发](README.md) · 上一章：[错误处理与用户反馈](16-errors.md) · 下一章：[工具](18-tools.md) · 相关：[命令](04-commands.md) · [ai_chat 的工具](https://github.com/Green1423/ncqqpy-plugin-ai-chat/blob/main/docs/ai-chat/08-tools.md)
 
-**命令给「人」敲，技能让 AI 也能触发同一条命令。** 技能不是另写一套 handler ——
+**命令给「人」敲，重定向让 AI 也能触发同一条命令。** 重定向不是另写一套 handler ——
 它只是**一行命令映射**：
 
 ```python
 async def on_load(self):
-    self.register_skill("search", command="byrdocs.search")
+    self.register_redirect("search", command="byrdocs.search")
 
     # 想**自己发**结果（而不是让 ai_chat 转发）就再给一个 deliver：
-    self.register_skill("notice", command="buptnews.get",
-                        deliver=self._deliver_skill_output)
+    self.register_redirect("notice", command="buptnews.get",
+                           deliver=self._deliver_redirect_output)
 ```
 
 | 项 | 来源 |
@@ -30,7 +30,7 @@ async def on_load(self):
   顶层命令（`/ban` 那种）不校验归属 —— 名字上看不出主人；
 * **命令不存在就不暴露**：消费方（`ai_chat`）每次按 `find_command()` 解析，
   解析不到或 `disabled` 就跳过，模型看不到死工具；
-* **不需要写 handler**：`register_skill()` 返回 `Skill`，不接收函数；
+* **不需要写 handler**：`register_redirect()` 返回 `Redirect`，不接收函数；
 * 卸载/禁用/热重载时框架按插件名整批撤销。
 
 ## 17.2 由谁把结果发给用户
@@ -39,7 +39,7 @@ async def on_load(self):
 段列表 —— 分段、图片、@ 的规矩只有插件自己知道。所以**推荐插件自己发**：
 
 ```python
-async def _deliver_skill_output(self, payload, ctx):
+async def _deliver_redirect_output(self, payload, ctx):
     # ctx.user_id / ctx.group_id / ctx.is_group 都在；用你自己的 api 发
     for chain in (payload if isinstance(payload, list) else [payload]):
         ...
@@ -52,7 +52,7 @@ async def _deliver_skill_output(self, payload, ctx):
 
 ## 17.3 消费方：ai_chat 侧
 
-`ai_chat` 把每个技能包成一个**委派型工具**（`delegates=True`）：
+`ai_chat` 把每个重定向包成一个**委派型工具**（`delegates=True`）：
 
 1. 模型决定调用 → `ai_chat` 合成一条以**当前用户身份**发的消息
    （`/<命令> --键=值`）→ `CommandManager.handle()`；
@@ -60,7 +60,7 @@ async def _deliver_skill_output(self, payload, ctx):
 3. 通过 → 执行命令 → 把返回值发给用户；
 4. `ai_chat` **结束本轮**，不接话、不把命令输出喂回模型。
 
-配置（`config.json → plugins.ai_chat.skills`）：
+配置（`config.json → plugins.ai_chat.redirects`）：
 
 ```json
 {"enabled": true, "allow": [], "deny": ["byrdocs.search"]}
@@ -69,21 +69,21 @@ async def _deliver_skill_output(self, payload, ctx):
 ## 17.4 调试
 
 ```python
-self.skills.list()                       # 现在有哪些技能
-self.skills.get("byrdocs.search")        # 单个
-self.skills.unregister_plugin("byrdocs") # 手工撤（一般不用，框架会做）
+self.redirects.list()                       # 现在有哪些重定向
+self.redirects.get("byrdocs.search")        # 单个
+self.redirects.unregister_plugin("byrdocs") # 手工撤（一般不用，框架会做）
 ```
 
 最直接的端到端验证：在对话里说一句本该由那个插件处理的话（「帮我查查学校的通知」），
 看回消息的是不是那个插件（AI 不该额外接话）。
 
-> ⚠️ 技能通道是**框架代码**：换框架版本要**重启进程**才生效（热重载只换插件）。
-> 旧进程里插件会打一行警告并跳过技能注册，命令不受影响。
+> ⚠️ 重定向通道是**框架代码**：换框架版本要**重启进程**才生效（热重载只换插件）。
+> 旧进程里插件会打一行警告并跳过重定向注册，命令不受影响。
 
 ## 17.5 什么时候该用我（`prompt_hint`）
 
 ```python
-self.register_skill(
+self.register_redirect(
     "recent", command="buptnews.list",
     description="列出最近/置顶的通知清单",
     prompt_hint="用户明确要『最近有什么通知』时用；"
@@ -91,6 +91,6 @@ self.register_skill(
 ```
 
 - `description` 说明**能干什么**，`prompt_hint` 说明**何时用 / 何时不要用**；
-- 它会被写进 ai_chat 系统提示的「插件工具/技能的使用时机」一节，
+- 它会被写进 ai_chat 系统提示的「插件工具/重定向的使用时机」一节，
   模型选工具时看得见（藏在 schema 里常常被忽略）；
 - `when=` 是它的别名，两个名字等价。

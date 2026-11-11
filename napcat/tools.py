@@ -1,8 +1,8 @@
 """工具注册表 —— 插件把能力**作为工具**交给 AI，结果**返回给模型**。
 
-与「技能」的区别（两条通道，别混）：
+与「重定向」的区别（两条通道，别混）：
 
-| | 技能（`register_skill`） | 工具（`register_tool`） |
+| | 重定向（`register_redirect`） | 工具（`register_tool`） |
 |---|---|---|
 | 本质 | **命令映射**（`byrdocs.search`） | 一段**自己写的 handler** |
 | 参数 | 从 `CommandSchema` 取 | 自己给 JSON Schema |
@@ -11,7 +11,7 @@
 | AI | 不接话、拿不到输出 | 拿到输出，据此继续推理 |
 
 适合做成工具的：查询类（搜索结果、日程、状态），模型应该看到数据再解释；
-适合做成技能的：动作类（发通知、置顶、写操作），执行完直接告诉用户就行。
+适合做成重定向的：动作类（发通知、置顶、写操作），执行完直接告诉用户就行。
 
 ```python
 class DemoPlugin(PluginBase):
@@ -46,7 +46,7 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-from .skills import NAME_RE, NamedRegistry, qualify_name, tool_name_for
+from .redirect import NAME_RE, NamedRegistry, qualify_name, tool_name_for
 
 
 @dataclass
@@ -109,7 +109,7 @@ class ToolRegistry(NamedRegistry):
         if "." in raw and not raw.startswith(f"{plugin}."):
             raise ValueError(f"工具 {full} 映射了别的插件的命名空间")
         if not callable(handler):
-            raise ValueError("工具必须给 handler（与技能不同：这里自己写实现）")
+            raise ValueError("工具必须给 handler（与重定向不同：这里自己写实现）")
         if full in self._entries:
             raise ValueError(f"工具 {full} 已存在")
         params = parameters if isinstance(parameters, dict) else {}

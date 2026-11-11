@@ -240,12 +240,12 @@ Instructions from: <displayPath>
 Its `source` is either `{kind:'agent-instructions', form:'instructions', changes:[...]}` or
 `{kind:'plugin', plugin:'agent-instructions'}` (`index.js:766-795`, `1199-1208`).
 
-**(b) Skill catalog** — `dsh-tool-skill/lib/index.js:238-261`: same `<system-reminder>` frame with a
-`<available_skills>` list inside, one entry per line as
+**(b) Redirect catalog** — `dsh-tool-redirect/lib/index.js:238-261`: same `<system-reminder>` frame with a
+`<available_redirects>` list inside, one entry per line as
 `` - `${entry.name}`: ${escapeText(entry.description)} `` (`index.js:293-295`), followed by the
-"call the `skill` tool with the exact skill name before taking task actions" paragraph and the
-"its `<skill_content>` block then appears in this conversation" paragraph. A re-publish says
-`"The available skill catalog changed. This complete catalog replaces every earlier available-skills
+"call the `redirect` tool with the exact redirect name before taking task actions" paragraph and the
+"its `<redirect_content>` block then appears in this conversation" paragraph. A re-publish says
+`"The available redirect catalog changed. This complete catalog replaces every earlier available-redirects
 list in this session:"` (`index.js:262-286`).
 
 **(c) Repeat-tool reminder** (`dsh-repeat-tool-reminder/lib/index.js:1385-1389`) — a loop-breaker

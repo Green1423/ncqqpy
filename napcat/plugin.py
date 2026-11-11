@@ -13,7 +13,7 @@ import traceback
 from abc import ABC
 
 from .tools import ToolRegistry
-from .skills import SkillRegistry, qualify_name
+from .redirect import RedirectRegistry, qualify_name
 from pathlib import Path
 from typing import Optional, Type
 
@@ -233,7 +233,7 @@ class PluginBase(ABC):
                  cmd_manager: CommandManager, perm_manager: PermissionManager,
                  file_manager: FileManager, logger, groups=None, cfg=None,
                  client=None, error_reporter=None, plugin_dir=None,
-                 skill_registry=None, tool_registry=None):
+                 redirect_registry=None, tool_registry=None):
         self.api = api
         #: 插件自己的目录（包插件是 `plugins/<名字>/`，单文件插件是 `plugins/`）。
         #: `self.database()` 默认把 sqlite 文件放在它下面的 `data/` 里。
@@ -246,12 +246,12 @@ class PluginBase(ABC):
         self.event_bus = event_bus
         self.timer = timer
         self.cmds = cmd_manager
-        #: 技能表（**别的插件**把能力交给 AI 用的通道，见 `napcat.skills`）。
+        #: 重定向表（**别的插件**把能力交给 AI 用的通道，见 `napcat.redirect`）。
         #: 框架注入共享实例；单独 new 插件（测试/脚本）时给一个独立实例，
         #: 语义仍然是「注册给能看见它的人」。
-        self.skills = skill_registry if skill_registry is not None else SkillRegistry()
+        self.redirects = redirect_registry if redirect_registry is not None else RedirectRegistry()
         #: 工具表（**把能力给模型用、结果回给模型**的通道，见 `napcat.tools`）。
-        #: 与 `self.skills` 的区别：技能=命令映射、结果直接发给用户；
+        #: 与 `self.redirects` 的区别：重定向=命令映射、结果直接发给用户；
         #: 工具=自己写的 handler、结果进模型上下文。
         #:
         #: ⚠️ 属性名是 `plugin_tools` 而不是 `tools`：`ai_chat` 这类插件自己
@@ -492,7 +492,7 @@ class PluginBase(ABC):
         """取消注册命令"""
         return self.cmds.unregister(name)
 
-    # ---- 技能（把能力交给 AI 用，见 napcat.skills）----
+    # ---- 重定向（把能力交给 AI 用，见 napcat.redirect）----
 
     def register_tool(self, name: str, *, description: str = "",
                       parameters: Optional[dict] = None, permission: str = "",
@@ -504,7 +504,7 @@ class PluginBase(ABC):
             async def ping(args: dict) -> str:
                 return "pong"        # 这句话进模型上下文，由模型组织答复
 
-        与 `register_skill` 的区别：技能是**命令映射**，执行后由命令把结果
+        与 `register_redirect` 的区别：重定向是**命令映射**，执行后由命令把结果
         发给用户，AI 不接话；工具是**自己写的 handler**，返回值给模型继续推理。
 
         `permission` / `scope` 在消费侧判（`ai_chat` 调用前检查，与命令同一口径）。
@@ -524,33 +524,33 @@ class PluginBase(ABC):
         return self.plugin_tools.unregister(self.tools_qualify(name))
 
     def tools_qualify(self, name: str) -> str:
-        """把工具短名拼成 `插件名.工具名`（见 `napcat.skills.qualify_name`）。"""
+        """把工具短名拼成 `插件名.工具名`（见 `napcat.redirect.qualify_name`）。"""
         return qualify_name(self.name, name)
 
-    def register_skill(self, name: str, *, command: str = "",
+    def register_redirect(self, name: str, *, command: str = "",
                        description: str = "", prompt_hint: str = "",
-                       when: str = "", deliver=None) -> "Skill":
-        """把你的**一条命令**挂给 AI 使用（技能 = 命令映射，不另写 handler）。
+                       when: str = "", deliver=None) -> "Redirect":
+        """把你的**一条命令**挂给 AI 使用（重定向 = 命令映射，不另写 handler）。
 
             async def on_load(self):
-                self.register_skill("search", command="byrdocs.search")
+                self.register_redirect("search", command="byrdocs.search")
 
         参数 schema 与说明都**从命令自己取**（`CommandSchema` / `description`），
         执行时走 `CommandManager.handle()` —— 权限、作用域、Schema 校验、
         错误反馈与用户手敲完全同一条路径。
 
         触发时由命令的返回值发消息，AI 不接话、也不接收输出。
-        卸载/禁用时框架会把本插件注册的技能一起撤掉。
+        卸载/禁用时框架会把本插件注册的重定向一起撤掉。
         """
         # `cmds` 可能不存在（测试里 __new__ 出来的最小插件）——
         # 归属校验是「能校验就更严」，不该因此让注册失败
-        return self.skills.register(
+        return self.redirects.register(
             self.name, name, command=command, description=description,
             prompt_hint=prompt_hint, when=when,
             cmds=getattr(self, "cmds", None), deliver=deliver)
 
-    def unregister_skill(self, name: str) -> bool:
-        return self.skills.unregister(self.skills.qualify(self.name, name))
+    def unregister_redirect(self, name: str) -> bool:
+        return self.redirects.unregister(self.redirects.qualify(self.name, name))
 
     # ---- 声明式注册（注册与逻辑分离，见 napcat.registry）----
 
@@ -882,9 +882,9 @@ class PluginManager:
         self._cfg = cfg
         self._client = client          # 主客户端（注入给插件）
         self._plugins: dict[str, PluginBase] = {}
-        #: 技能表：**跨插件**共享 —— 提供方注册，调用方（ai_chat）读取。
+        #: 重定向表：**跨插件**共享 —— 提供方注册，调用方（ai_chat）读取。
         #: 放这里而不是各插件自己一份：提供方不该依赖消费者。
-        self.skill_registry = SkillRegistry(logger=self.logger)
+        self.redirect_registry = RedirectRegistry(logger=self.logger)
         self.tool_registry = ToolRegistry(logger=self.logger)
         self._watcher_task: Optional[asyncio.Task] = None
         self._file_mtimes: dict[str, float] = {}
@@ -1270,7 +1270,7 @@ class PluginManager:
                 instance = plugin_class(
                     api=self.api, event_bus=self.event_bus,
                     timer=self.timer, cmd_manager=self.cmd_manager,
-                    skill_registry=self.skill_registry,
+                    redirect_registry=self.redirect_registry,
                     tool_registry=self.tool_registry,
                     perm_manager=self.perm_manager,
                     file_manager=self.file_manager, logger=self.logger,
@@ -1364,11 +1364,11 @@ class PluginManager:
         await self._errors.notify_operators(error, where=f"插件 {name} {phase}")
 
     def _release(self, name: str, plugin: Optional["PluginBase"] = None) -> None:
-        """撤掉插件注册的命令 / 技能 / 工具 / 事件处理器 / 定时任务。
+        """撤掉插件注册的命令 / 重定向 / 工具 / 事件处理器 / 定时任务。
 
         卸载、加载失败、启用失败三条路径共用这一份拆卸逻辑 —— 以前它们各写
         一遍，顺序与容错还各不相同，漏一处就是「插件已经没了，事件却照收」。
-        顺序有意如此：先把**对外可调用的入口**（命令/技能/工具）摘掉，再撤
+        顺序有意如此：先把**对外可调用的入口**（命令/重定向/工具）摘掉，再撤
         事件与定时器，中间不会留下「还能调到、但对象已经解绑」的窗口。
 
         Args:
@@ -1376,7 +1376,7 @@ class PluginManager:
             plugin: 插件实例；还没构造出来（`on_load` 之前就失败）时为空，
                 此时只回收注册表里按插件名记的条目。
         """
-        for registry, label in ((self.skill_registry, "技能"),
+        for registry, label in ((self.redirect_registry, "重定向"),
                                 (self.tool_registry, "工具")):
             try:
                 registry.unregister_plugin(name)
@@ -1596,7 +1596,7 @@ class PluginManager:
             if plugin._enabled:
                 await plugin.on_disable()
                 plugin._enabled = False
-            # 离场实例必须与事件总线、定时器、命令/技能/工具注册表彻底解绑：
+            # 离场实例必须与事件总线、定时器、命令/重定向/工具注册表彻底解绑：
             # 它的处理器可能是**任何**历史状态下注册的（例如热重载回滚过几次），
             # 只依赖 on_disable 的增量撤销不够。不解绑的后果很直观：`/events` 里
             # 同一个插件出现两对监听器，每条群消息被处理两次；旧命令还绑着这个

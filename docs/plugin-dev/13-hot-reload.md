@@ -24,9 +24,9 @@
 这不是缺点，是边界：框架代码在进程启动时就被广泛引用了（类、注册表、事件循环），
 热替换只会换出一半新一半旧的诡异状态。
 
-> 依赖新框架 API 的插件**必须**自己兜底：`hasattr(self, "register_skill")` 之类，
+> 依赖新框架 API 的插件**必须**自己兜底：`hasattr(self, "register_redirect")` 之类，
 > 没兜底的插件会在老进程里 `on_load` 直接失败。写插件时把「框架可能比插件旧」
-> 当成正常状态（技能、`napcat.skills` 就是这么接入的）。
+> 当成正常状态（重定向、`napcat.redirect` 就是这么接入的）。
 
 ## 13.1 从 GitHub 装卸插件（`plugin_manager`）
 
