@@ -20,8 +20,14 @@ TMP_DIR = ROOT / "tests" / ".test-tmp"
 TMP_DIR.mkdir(parents=True, exist_ok=True)   # 新 clone 里没有它（.gitignore 排除）
 
 from napcat.redirect import Redirect, RedirectRegistry                     # noqa: E402
-from plugins.ai_chat.tools import (ToolContext, ToolRegistry,      # noqa: E402
-                                   command_tool_schema, register_redirect_tools)
+
+try:
+    from plugins.ai_chat.tools import (ToolContext, ToolRegistry,  # noqa: E402
+                                       command_tool_schema,
+                                       register_redirect_tools)
+except ModuleNotFoundError:          # 框架仓库单独 clone 时没有 ai_chat
+    print("⏭️ 跳过：ai_chat 插件未安装（clone 到 plugins/ai_chat 后恢复）")
+    raise SystemExit(0)
 
 PASSED = 0
 FAILED = 0
